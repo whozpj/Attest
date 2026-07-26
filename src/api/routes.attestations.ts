@@ -43,12 +43,17 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
 
   app.get("/v1/attestations/:id", async (req) => {
     const { id } = req.params as { id: string };
+    // effectiveStatus must run before the action row is read: if this is the
+    // read that observes a fresh expiry, it purges canonical_json as a side
+    // effect. Reading the action first would return the pre-purge summary
+    // from this very response, one write later than the DB actually has it.
+    const status = effectiveStatus(db, id);
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
     const action = q.getAction(db, att.action_id)!;
     return {
       attestation_id: id,
-      status: effectiveStatus(db, id),
+      status,
       payload_hash: action.payload_hash,
       required_approvals: att.required_approvals,
       approvals: q.getApprovals(db, id).length,

@@ -105,3 +105,39 @@ describe("rejections", () => {
     expect(q.getAction(db, "act_1")!.canonical_json).toBeNull();
   });
 });
+
+describe("expiry purges the payload even when never decided", () => {
+  it("purges canonical_json and stamps purged_at from a read alone", async () => {
+    await seed(1, ["prin_1"], -1000);
+    expect(effectiveStatus(db, "att_1")).toBe("expired");
+
+    const action = q.getAction(db, "act_1")!;
+    expect(action.canonical_json).toBeNull();
+    expect(action.purged_at).not.toBeNull();
+    expect(action.payload_hash).toBe(HASH);
+  });
+
+  it("persists the attestation row itself as expired, not just the return value", async () => {
+    await seed(1, ["prin_1"], -1000);
+    effectiveStatus(db, "att_1");
+
+    const att = q.getAttestation(db, "att_1")!;
+    expect(att.status).toBe("expired");
+    expect(att.resolved_at).not.toBeNull();
+  });
+
+  it("is idempotent across repeated reads of an already-expired attestation", async () => {
+    await seed(1, ["prin_1"], -1000);
+    effectiveStatus(db, "att_1");
+    const purgedAtFirst = q.getAction(db, "act_1")!.purged_at;
+
+    expect(effectiveStatus(db, "att_1")).toBe("expired");
+    expect(q.getAction(db, "act_1")!.purged_at).toBe(purgedAtFirst);
+  });
+
+  it("never purges a still-pending attestation", async () => {
+    await seed(1, ["prin_1"], 60_000);
+    expect(effectiveStatus(db, "att_1")).toBe("pending");
+    expect(q.getAction(db, "act_1")!.canonical_json).not.toBeNull();
+  });
+});

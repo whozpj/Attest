@@ -6,12 +6,26 @@ import { FailClosedError, type AttestationStatus, type Decision } from "../types
 
 const TOKEN_TTL_SECONDS = 300;
 
-/** Expiry is evaluated on read, so a prototype with no scheduler cannot serve a stale pending row. */
+/**
+ * Expiry is evaluated on read, since a prototype with no scheduler cannot
+ * serve a stale pending row. Detecting expiry isn't enough on its own: an
+ * attestation that simply times out and is never decided would otherwise sit
+ * in the database forever with its payload intact. So the first read that
+ * observes expiry also resolves it and purges the payload — every path that
+ * can observe "expired" ends with canonical_json gone, exactly like every
+ * other terminal state (denied/approved). Later reads of an already-expired
+ * row take the `att.status !== "pending"` branch and are no-ops.
+ */
 export function effectiveStatus(db: Database, attestationId: string): AttestationStatus {
   const att = q.getAttestation(db, attestationId);
   if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
   if (att.status !== "pending") return att.status;
-  return Date.parse(att.expires_at) <= Date.now() ? "expired" : "pending";
+  if (Date.parse(att.expires_at) > Date.now()) return "pending";
+
+  q.setAttestationResolved(db, attestationId, "expired", null);
+  q.purgeActionPayload(db, att.action_id);
+  q.audit(db, { attestation_id: attestationId, event: "attestation_expired", actor: null, detail: null });
+  return "expired";
 }
 
 export async function recordDecision(
@@ -26,7 +40,9 @@ export async function recordDecision(
   const status = effectiveStatus(db, attestationId);
 
   if (status === "expired") {
-    q.setAttestationResolved(db, attestationId, "expired", null);
+    // effectiveStatus has already persisted the transition and purged the
+    // payload on first observation; this audit event is specifically about
+    // the decision attempt itself, distinct from passive expiry detection.
     q.audit(db, { attestation_id: attestationId, event: "decision_after_expiry", actor: principalId, detail: null });
     throw new FailClosedError("expired", 410, "attestation has expired");
   }
