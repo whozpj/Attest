@@ -326,9 +326,9 @@ them can be used to force a resolution.
 | 400 | `payload_invalid` — `principal_id` missing or not a string |
 | 400 | `signature_required` — `response` is missing, or present but malformed (no string `id`) |
 | 401 | `unknown_credential` — the credential in `response` isn't recognised, or belongs to a different principal |
-| 400 | `binding_mismatch` — the signed challenge does not match this action's hash for the declared decision |
+| 400 | `binding_mismatch` — the signed challenge does not match this action's hash for the declared decision, or the request was never signed at all (see note below) |
 | 401 | `signature_invalid` — signature verification failed |
-| 401 | `counter_regression` — the authenticator's signature counter went backwards, a cloned-credential signal |
+| 401 | `counter_regression` — the authenticator's signature counter went backwards — **not on its own proof of a cloned credential** (see note below) |
 | 410 | `expired` — the attestation's TTL has elapsed |
 | 409 | `already_resolved` — the attestation is already `approved`, `denied`, or `expired` |
 | 403 | `not_an_approver` — this principal is not in `approver_ids` for this attestation |
@@ -336,6 +336,29 @@ them can be used to force a resolution.
 A rejected decision (any 4xx/401 above) never resolves the attestation — an
 attacker who can't produce a valid signature can't force it to `denied` by
 throwing failed attempts at this endpoint; it stays `pending`.
+
+**`binding_mismatch` and `counter_regression` do not, by themselves, prove a
+real authenticator produced the request.** Both fire before the actual
+signature is checked — a challenge, origin, or counter mismatch is detected
+ahead of verifying who signed anything — and forgery of everything else in
+the request is cheap: RP ID and origin are public constants, and
+`POST /v1/attestations/:id/options` hands the real challenge and the
+principal's real credential IDs to any caller who can name an attestation
+id, no proof of identity required. So a `binding_mismatch` or
+`counter_regression` response looks identical over HTTP whether it came
+from a genuinely-keyed authenticator (a human who signed the wrong thing,
+or an authenticator that really is behind/cloned) or from someone with no
+key at all who forged the rest of the payload. The HTTP response cannot
+tell these apart. The audit log can: an `audit_log` row written for both
+events carries `verified=true` or `verified=false` in `detail`, computed by an
+independent check of the actual signature against the credential's stored
+public key. `verified=true` means a real key was behind the rejection;
+`verified=false` means it wasn't. This field is not exposed through any API
+response — it's visible only to whoever can read the database directly.
+`signature_invalid`'s audit row carries the same `detail` field for a
+uniform shape, always `verified=false` there — but with no ambiguity to
+resolve, since reaching that branch already means the real signature check
+ran and failed.
 
 ---
 
@@ -418,9 +441,9 @@ stable across endpoints:
 |---|---|---|
 | `payload_invalid` | 400 | Request body failed validation — an action payload against its per-type schema (before hashing), or a missing/non-string `principal_id` on the attestation decision routes below |
 | `unknown_principal` | 404 | No principal with the given id |
-| `binding_mismatch` | 400 | The signed WebAuthn challenge does not match the action's `payload_hash` and declared `decision` |
+| `binding_mismatch` | 400 | The signed WebAuthn challenge does not match the action's `payload_hash` and declared `decision` — **or the request was never signed at all; the HTTP response can't tell you which, see the note under `/decision`** |
 | `signature_invalid` | 401 | WebAuthn signature verification failed |
-| `counter_regression` | 401 | Authenticator signature counter went backwards (possible cloned credential) |
+| `counter_regression` | 401 | Authenticator signature counter went backwards — **not on its own proof of a cloned credential; see the note under `/decision`** |
 | `not_an_approver` | 403 | Principal is not in the attestation's `approver_ids` |
 | `already_resolved` | 409 | Attestation is already `approved`, `denied`, or `expired` |
 | `expired` | 410 | Attestation's TTL has elapsed |
