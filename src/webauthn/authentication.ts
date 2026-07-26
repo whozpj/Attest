@@ -4,20 +4,33 @@ import {
 } from "@simplewebauthn/server";
 import type { Database } from "better-sqlite3";
 import * as q from "../db/queries.js";
-import { hashToBytes } from "../crypto/canonical.js";
-import { FailClosedError } from "../types.js";
+import { canonicalize, hashCanonical, hashToBytes } from "../crypto/canonical.js";
+import { FailClosedError, type Decision } from "../types.js";
 import { RP } from "./config.js";
 
 /**
- * The action hash IS the challenge. WebAuthn already signs its challenge, so
- * this is what binds the authenticator's signature to one specific action —
- * no novel cryptography required.
+ * The action hash is the dominant term in the challenge's preimage, alongside
+ * the decision being signed. Binding the decision in means an approve and a
+ * deny for the same action sign different bytes, so an assertion captured
+ * for one can never be replayed as the other — deny is no longer a free,
+ * unsigned action an attacker can force on a stranger's pending attestation.
+ *
+ * `hashToBytes(payloadHash)` below is a pure validation call — it keeps the
+ * malformed-hash rejection working, since canonicalizing a malformed string
+ * would otherwise silently succeed.
  */
-export function challengeFor(payloadHash: string): string {
-  return Buffer.from(hashToBytes(payloadHash)).toString("base64url");
+function boundHash(payloadHash: string, decision: Decision): string {
+  hashToBytes(payloadHash);
+  return hashCanonical(canonicalize({ act: payloadHash, decision }));
 }
 
-export async function beginApproval(db: Database, principalId: string, payloadHash: string) {
+export function challengeFor(payloadHash: string, decision: Decision): string {
+  return Buffer.from(hashToBytes(boundHash(payloadHash, decision))).toString("base64url");
+}
+
+export async function beginApproval(
+  db: Database, principalId: string, payloadHash: string, decision: Decision,
+) {
   const creds = q.getCredentialsFor(db, principalId);
   if (creds.length === 0) {
     throw new FailClosedError("no_credential", 400, "principal has no enrolled credential");
@@ -27,7 +40,7 @@ export async function beginApproval(db: Database, principalId: string, payloadHa
     rpID: RP.id,
     // `.slice()` narrows to Uint8Array<ArrayBuffer>, matching the library's
     // own Uint8Array_ type (ReturnType<Uint8Array['slice']>) under strict mode.
-    challenge: hashToBytes(payloadHash).slice(),
+    challenge: hashToBytes(boundHash(payloadHash, decision)).slice(),
     allowCredentials: creds.map((c) => ({ id: c.credential_id })),
     userVerification: "preferred",
   });
@@ -37,6 +50,7 @@ export async function finishApproval(
   db: Database,
   principalId: string,
   payloadHash: string,
+  decision: Decision,
   response: AuthenticationResponseJSON,
 ): Promise<{ client_data_json: string }> {
   const cred = q.getCredential(db, response.id);
@@ -48,7 +62,7 @@ export async function finishApproval(
   try {
     verification = await verifyAuthenticationResponse({
       response,
-      expectedChallenge: challengeFor(payloadHash),
+      expectedChallenge: challengeFor(payloadHash, decision),
       expectedOrigin: RP.origin,
       expectedRPID: RP.id,
       credential: {
@@ -59,10 +73,11 @@ export async function finishApproval(
     });
   } catch {
     // A challenge mismatch lands here: the human signed a different action
-    // than the one being approved. Highest-signal event in the system.
+    // (or a different decision on the same action) than the one being
+    // recorded. Highest-signal event in the system.
     q.audit(db, {
       attestation_id: null, event: "binding_mismatch",
-      actor: principalId, detail: payloadHash,
+      actor: principalId, detail: `hash=${payloadHash} decision=${decision}`,
     });
     throw new FailClosedError("binding_mismatch", 400, "signed challenge does not match action");
   }
