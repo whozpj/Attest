@@ -7,6 +7,11 @@ import { hashCanonical } from "../crypto/canonical.js";
 import { RP } from "./config.js";
 import type { Database } from "better-sqlite3";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
+// Adversary's self-contained software authenticator (real EC P-256 keys,
+// genuine ECDSA signatures) — reused here rather than hand-rolled, since it
+// already round-trips through this file's actual verification path. See
+// tests/security/decision-binding.test.ts for its other use.
+import { makeFakeCredential, signAssertion } from "../../tests/security/lib/webauthn-fake.js";
 
 let db: Database;
 const hash = hashCanonical('{"amount":2500000}');
@@ -121,8 +126,14 @@ describe("finishApproval", () => {
     await expect(finishApproval(db, "prin_1", hash, "approve", response))
       .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
 
-    const events = db.prepare(`SELECT event FROM audit_log`).all() as Array<{ event: string }>;
-    expect(events.map((e) => e.event)).toEqual(["possible_credential_clone"]);
+    const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
+      Array<{ event: string; detail: string | null }>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("possible_credential_clone");
+    // No real key was ever involved (garbage public_key, garbage signature),
+    // so this must record as unverified — an unauthenticated forger, not a
+    // credential that's cryptographically proven itself compromised.
+    expect(events[0]?.detail).toMatch(/verified=false$/);
   });
 
   it("still reports a genuine challenge mismatch as binding_mismatch", async () => {
@@ -133,7 +144,38 @@ describe("finishApproval", () => {
     await expect(finishApproval(db, "prin_1", hash, "approve", response))
       .rejects.toMatchObject({ code: "binding_mismatch", httpStatus: 400 });
 
-    const events = db.prepare(`SELECT event FROM audit_log`).all() as Array<{ event: string }>;
-    expect(events.map((e) => e.event)).toEqual(["binding_mismatch"]);
+    const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
+      Array<{ event: string; detail: string | null }>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("binding_mismatch");
+    // Same reasoning: no real key, so unverified — this crafted response
+    // proves nothing about whether an actual credential is compromised.
+    expect(events[0]?.detail).toMatch(/verified=false$/);
+  });
+
+  it("records verified=true when a counter regression occurs on a genuinely signed response", async () => {
+    // The other half of the distinction: a real EC keypair signs a real
+    // assertion — the exact bytes @simplewebauthn/server verifies — but its
+    // counter is behind what's stored. This is what an actual cloned
+    // authenticator looks like: it has the key, but its usage history has
+    // diverged from the original device.
+    const cred = makeFakeCredential();
+    q.insertCredential(db, {
+      id: "cred_real", principal_id: "prin_1",
+      credential_id: cred.credentialId, public_key: cred.publicKeyCose, transports: null,
+    });
+    q.updateSignCount(db, cred.credentialId, 42);
+
+    const challenge = challengeFor(hash, "approve");
+    const response = signAssertion(cred, challenge, 1); // genuinely signed, counter=1 < stored 42
+
+    await expect(finishApproval(db, "prin_1", hash, "approve", response))
+      .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
+
+    const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
+      Array<{ event: string; detail: string | null }>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe("possible_credential_clone");
+    expect(events[0]?.detail).toBe("stored=42 presented=1 verified=true");
   });
 });

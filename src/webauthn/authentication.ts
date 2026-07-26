@@ -2,7 +2,9 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse,
   type AuthenticationResponseJSON,
 } from "@simplewebauthn/server";
-import { isoBase64URL, parseAuthenticatorData } from "@simplewebauthn/server/helpers";
+import {
+  isoBase64URL, isoUint8Array, parseAuthenticatorData, toHash, verifySignature,
+} from "@simplewebauthn/server/helpers";
 import type { Database } from "better-sqlite3";
 import * as q from "../db/queries.js";
 import { canonicalize, hashCanonical, hashToBytes } from "../crypto/canonical.js";
@@ -47,6 +49,49 @@ export async function beginApproval(
   });
 }
 
+/**
+ * Was this response actually signed by whoever holds the credential's
+ * private key — independent of whether it passes the RP-level checks
+ * (challenge, origin, counter)?
+ *
+ * Both the counter-regression short-circuit above and the generic catch below
+ * reject *before* @simplewebauthn's own signature check ever runs: the
+ * library throws on challenge/origin/counter mismatches ahead of computing
+ * `verified`, and our own pre-check does the same for counter regression on
+ * purpose (see the comment in finishApproval). That means, on their own,
+ * neither `possible_credential_clone` nor `binding_mismatch` can distinguish
+ * a cryptographically-attested rejection — a genuinely-keyed authenticator
+ * whose counter fell behind, or one that signed a stale/wrong challenge —
+ * from an unauthenticated forgery. And forgery is cheap here: RP ID and
+ * origin are public constants, and `/v1/attestations/:id/options` hands the
+ * real challenge and credential IDs to any caller who knows an attestation
+ * id, no signature required. Only the signature itself proves key
+ * possession, so we check it independently, over the same
+ * authData‖SHA-256(clientDataJSON) bytes @simplewebauthn signs, using its own
+ * public helpers rather than re-deriving the byte layout by hand. Any decode
+ * failure (garbage authenticatorData, a public key that isn't valid COSE,
+ * etc.) fails closed to `false` — a response we can't even parse was
+ * certainly not signed by anyone holding the key.
+ */
+async function signatureHolds(
+  response: AuthenticationResponseJSON,
+  cred: { public_key: Buffer },
+): Promise<boolean> {
+  try {
+    const authData = isoBase64URL.toBuffer(response.response.authenticatorData);
+    const clientData = isoBase64URL.toBuffer(response.response.clientDataJSON);
+    const signature = isoBase64URL.toBuffer(response.response.signature);
+    const clientDataHash = await toHash(clientData);
+    return await verifySignature({
+      signature,
+      data: isoUint8Array.concat([authData, clientDataHash]),
+      credentialPublicKey: new Uint8Array(cred.public_key),
+    });
+  } catch {
+    return false;
+  }
+}
+
 export async function finishApproval(
   db: Database,
   principalId: string,
@@ -81,9 +126,11 @@ export async function finishApproval(
     ).counter;
 
     if ((presentedCount > 0 || cred.sign_count > 0) && presentedCount <= cred.sign_count) {
+      const verified = await signatureHolds(response, cred);
       q.audit(db, {
         attestation_id: null, event: "possible_credential_clone",
-        actor: principalId, detail: `stored=${cred.sign_count} presented=${presentedCount}`,
+        actor: principalId,
+        detail: `stored=${cred.sign_count} presented=${presentedCount} verified=${verified}`,
       });
       throw new FailClosedError("counter_regression", 401, "authenticator counter regressed");
     }
@@ -108,16 +155,27 @@ export async function finishApproval(
     // malformed response. The human signed a different action (or a different
     // decision on the same action) than the one being recorded, or the
     // response was never a valid assertion to begin with. Highest-signal
-    // event in the system.
+    // event in the system — and, like possible_credential_clone above,
+    // reachable by an unauthenticated forgery, so `verified` here is what
+    // separates "someone who holds the key signed the wrong thing" from
+    // "someone with no key at all guessed a credential ID."
+    const verified = await signatureHolds(response, cred);
     q.audit(db, {
       attestation_id: null, event: "binding_mismatch",
-      actor: principalId, detail: `hash=${payloadHash} decision=${decision}`,
+      actor: principalId, detail: `hash=${payloadHash} decision=${decision} verified=${verified}`,
     });
     throw new FailClosedError("binding_mismatch", 400, "signed challenge does not match action");
   }
 
   if (!verification.verified) {
-    q.audit(db, { attestation_id: null, event: "signature_invalid", actor: principalId, detail: null });
+    // Unlike the two branches above, this one already ran the real signature
+    // check to completion — `verified` isn't an open question here, it's
+    // literally what this branch measures. Recorded for a uniform audit-row
+    // shape, not because there's any ambiguity to resolve.
+    q.audit(db, {
+      attestation_id: null, event: "signature_invalid",
+      actor: principalId, detail: "verified=false",
+    });
     throw new FailClosedError("signature_invalid", 401, "signature verification failed");
   }
 
