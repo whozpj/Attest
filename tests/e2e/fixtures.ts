@@ -23,3 +23,16 @@ export async function createPrincipal(baseURL: string, email: string): Promise<s
   });
   return (await res.json()).principal_id as string;
 }
+
+/**
+ * Enrols a passkey for `principalId` through the real browser ceremony on
+ * `page`. Each Page has its own CDP session, so pairing one page with
+ * `withVirtualAuthenticator(page)` per principal (rather than adding two
+ * authenticators to one page) is what keeps two approvers' credentials from
+ * ever sharing storage — there is no cross-page WebAuthn state to leak.
+ */
+export async function enrolPasskey(page: Page, principalId: string): Promise<void> {
+  await page.goto(`/approve/enrol.html?principal=${principalId}`);
+  await page.click("#enrol");
+  await page.waitForFunction(() => document.getElementById("status")?.textContent?.includes("enrolled"));
+}
