@@ -131,7 +131,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     }
 
     const action = q.getAction(db, att.action_id)!;
-    return beginApproval(db, body.principal_id, action.payload_hash, body.decision);
+    return beginApproval(db, body.principal_id, action.payload_hash, id, body.decision);
   });
 
   app.post("/v1/attestations/:id/decision", async (req) => {
@@ -149,7 +149,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     // without a verified signature is a decision anyone who knows the
     // attestation_id and a principal_id could force on a stranger.
     const result = await finishApproval(
-      db, body.principal_id, action.payload_hash, body.decision, body.response as never,
+      db, body.principal_id, action.payload_hash, id, body.decision, body.response as never,
     );
 
     return recordDecision(db, app.ctx.kp, id, body.principal_id, body.decision, result.client_data_json);

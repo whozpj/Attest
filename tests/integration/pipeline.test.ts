@@ -14,26 +14,39 @@ const wire = {
 
 describe("canonicalize -> hash -> challenge", () => {
   // The challenge is no longer the raw payload_hash bytes -- it's derived
-  // from (action hash, decision) together, so approve and deny sign
-  // different bytes over the same action. payload_hash is the dominant term
-  // in the preimage, not the challenge itself (spec §7).
-  it("is the same challenge for the same action and the same decision", () => {
+  // from (action hash, attestation id, decision) together, so approve and
+  // deny sign different bytes over the same action (ca95146 folded the
+  // attestation id into the same preimage as the earlier decision-binding
+  // fix, closing a hole where two attestations sharing a payload_hash also
+  // shared a challenge). payload_hash is the dominant term in the preimage,
+  // not the challenge itself (spec §7). These tests don't exercise
+  // attestation-scoping directly -- that's covered at the unit level in
+  // src/webauthn/authentication.test.ts and at the security level by
+  // Adversary -- so a shared literal attestation id is used wherever the
+  // property under test isn't about the attestation id itself.
+  it("is the same challenge for the same action, attestation, and decision", () => {
     const action = prepareAction(wire);
-    expect(challengeFor(action.payload_hash, "approve"))
-      .toBe(challengeFor(action.payload_hash, "approve"));
+    expect(challengeFor(action.payload_hash, "att_1", "approve"))
+      .toBe(challengeFor(action.payload_hash, "att_1", "approve"));
   });
 
-  it("changes the challenge when the decision changes on the same action", () => {
+  it("changes the challenge when the decision changes on the same action and attestation", () => {
     const action = prepareAction(wire);
-    expect(challengeFor(action.payload_hash, "approve"))
-      .not.toBe(challengeFor(action.payload_hash, "deny"));
+    expect(challengeFor(action.payload_hash, "att_1", "approve"))
+      .not.toBe(challengeFor(action.payload_hash, "att_1", "deny"));
+  });
+
+  it("changes the challenge when the attestation id changes on the same action and decision", () => {
+    const action = prepareAction(wire);
+    expect(challengeFor(action.payload_hash, "att_1", "approve"))
+      .not.toBe(challengeFor(action.payload_hash, "att_2", "approve"));
   });
 
   it("changes the challenge when any payload field changes", () => {
-    const a = challengeFor(prepareAction(wire).payload_hash, "approve");
+    const a = challengeFor(prepareAction(wire).payload_hash, "att_1", "approve");
     const b = challengeFor(prepareAction({
       ...wire, payload: { ...wire.payload, amount: 2500001 },
-    }).payload_hash, "approve");
+    }).payload_hash, "att_1", "approve");
     expect(a).not.toBe(b);
   });
 
