@@ -50,3 +50,7 @@ async function main(): Promise<void> {
 }
 
 await main();
+
+// Marks this file as a module so its top-level await typechecks under
+// `tsc --noEmit`; it has no imports of its own.
+export {};
