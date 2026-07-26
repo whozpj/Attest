@@ -7,6 +7,12 @@ import { beginApproval, finishApproval } from "../webauthn/authentication.js";
 import { effectiveStatus, recordDecision } from "./state.js";
 import { FailClosedError, type Decision } from "../types.js";
 
+function assertDecision(decision: unknown): asserts decision is Decision {
+  if (decision !== "approve" && decision !== "deny") {
+    throw new FailClosedError("invalid_decision", 400, "decision must be 'approve' or 'deny'");
+  }
+}
+
 export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppContext }): void {
   const { db } = app.ctx;
 
@@ -66,28 +72,35 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
 
   app.post("/v1/attestations/:id/options", async (req) => {
     const { id } = req.params as { id: string };
-    const { principal_id } = req.body as { principal_id: string };
+    const { principal_id, decision } = req.body as { principal_id: string; decision?: unknown };
+    // The challenge is decision-specific, so the caller must declare up front
+    // which action they're about to sign for — "I'm about to approve" and
+    // "I'm about to deny" are bound to different challenges before the
+    // ceremony even starts, which is what makes a captured deny-assertion
+    // unusable as a replayed approval and vice versa.
+    assertDecision(decision);
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
     const action = q.getAction(db, att.action_id)!;
-    return beginApproval(db, principal_id, action.payload_hash);
+    return beginApproval(db, principal_id, action.payload_hash, decision);
   });
 
   app.post("/v1/attestations/:id/decision", async (req) => {
     const { id } = req.params as { id: string };
-    const body = req.body as { principal_id: string; decision: Decision; response?: unknown };
+    const body = req.body as { principal_id: string; decision?: unknown; response?: unknown };
+    assertDecision(body.decision);
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
     const action = q.getAction(db, att.action_id)!;
 
-    let clientDataJson = "{}";
-    if (body.decision === "approve") {
-      const result = await finishApproval(
-        db, body.principal_id, action.payload_hash, body.response as never,
-      );
-      clientDataJson = result.client_data_json;
-    }
+    // finishApproval runs for both decisions, unconditionally: deny requires
+    // exactly the same signed proof as approve now. A decision recorded
+    // without a verified signature is a decision anyone who knows the
+    // attestation_id and a principal_id could force on a stranger.
+    const result = await finishApproval(
+      db, body.principal_id, action.payload_hash, body.decision, body.response as never,
+    );
 
-    return recordDecision(db, app.ctx.kp, id, body.principal_id, body.decision, clientDataJson);
+    return recordDecision(db, app.ctx.kp, id, body.principal_id, body.decision, result.client_data_json);
   });
 }
