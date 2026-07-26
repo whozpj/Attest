@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Enrol passkey</title>
+<button id="enrol">Enrol passkey</button>
+<p id="status"></p>
+<script src="/vendor/simplewebauthn-browser.js"></script>
+<script type="module">
+  const principalId = new URLSearchParams(location.search).get("principal");
+  document.getElementById("enrol").onclick = async () => {
+    const optionsJSON = await fetch(`/v1/principals/${principalId}/credentials/options`, {
+      method: "POST",
+    }).then((r) => r.json());
+    const response = await SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
+    const res = await fetch(`/v1/principals/${principalId}/credentials`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(response),
+    });
+    document.getElementById("status").textContent =
+      res.ok ? "enrolled" : "failed";
+  };
+</script>
