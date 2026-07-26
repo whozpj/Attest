@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareAction } from "../../src/actions/render.js";
 import { challengeFor } from "../../src/webauthn/authentication.js";
-import { hashToBytes } from "../../src/crypto/canonical.js";
 import { loadOrCreateKeypair, signAttestation, verifyAttestation, publicJwks } from "../../src/crypto/tokens.js";
 import { buildServer } from "../../src/api/server.js";
 
@@ -14,17 +13,27 @@ const wire = {
 };
 
 describe("canonicalize -> hash -> challenge", () => {
-  it("carries one hash unchanged across the seam", () => {
+  // The challenge is no longer the raw payload_hash bytes -- it's derived
+  // from (action hash, decision) together, so approve and deny sign
+  // different bytes over the same action. payload_hash is the dominant term
+  // in the preimage, not the challenge itself (spec §7).
+  it("is the same challenge for the same action and the same decision", () => {
     const action = prepareAction(wire);
-    const challenge = challengeFor(action.payload_hash);
-    expect(Buffer.from(challenge, "base64url")).toEqual(Buffer.from(hashToBytes(action.payload_hash)));
+    expect(challengeFor(action.payload_hash, "approve"))
+      .toBe(challengeFor(action.payload_hash, "approve"));
+  });
+
+  it("changes the challenge when the decision changes on the same action", () => {
+    const action = prepareAction(wire);
+    expect(challengeFor(action.payload_hash, "approve"))
+      .not.toBe(challengeFor(action.payload_hash, "deny"));
   });
 
   it("changes the challenge when any payload field changes", () => {
-    const a = challengeFor(prepareAction(wire).payload_hash);
+    const a = challengeFor(prepareAction(wire).payload_hash, "approve");
     const b = challengeFor(prepareAction({
       ...wire, payload: { ...wire.payload, amount: 2500001 },
-    }).payload_hash);
+    }).payload_hash, "approve");
     expect(a).not.toBe(b);
   });
 
