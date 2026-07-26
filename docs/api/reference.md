@@ -258,6 +258,7 @@ credentials. Calling this twice for the same attestation and principal with
 | 200 | Options generated |
 | 404 | `unknown_attestation` |
 | 400 | `invalid_decision` — `decision` missing or not `"approve"`/`"deny"` |
+| 400 | `payload_invalid` — `principal_id` missing or not a string |
 | 400 | `no_credential` — the principal has no enrolled passkey |
 
 ---
@@ -295,7 +296,17 @@ immediately, discarding any approvals already recorded.
 Both shapes are identical apart from `decision`. `response` must be the
 assertion produced against the `challenge` this same principal obtained from
 `/options` with the *same* `decision` — a `response` signed against the
-approve-challenge will not verify as a deny, and vice versa.
+approve-challenge will not verify as a deny, and vice versa. `response` is
+required for both decisions; a request with no `response` field at all —
+just `principal_id` and `decision`, the two identifiers an attacker needs to
+attempt this endpoint — is rejected as `signature_required`, the same code
+as a `response` present but missing a string `id`. One opaque code for
+"sent nothing" and "sent garbage" alike, the same anti-enumeration reasoning
+as `principal_invalid` on `POST /v1/principals`: a caller probing this
+endpoint shouldn't be able to tell the two apart. Every rejection here —
+`invalid_decision`, `payload_invalid`, `signature_required`, and everything
+below — is audited and leaves the attestation exactly as it was; none of
+them can be used to force a resolution.
 
 **Response** — `200 OK`
 
@@ -312,6 +323,8 @@ approve-challenge will not verify as a deny, and vice versa.
 | 200 | Decision recorded (whatever the resulting status) |
 | 404 | `unknown_attestation` |
 | 400 | `invalid_decision` — `decision` missing or not `"approve"`/`"deny"` |
+| 400 | `payload_invalid` — `principal_id` missing or not a string |
+| 400 | `signature_required` — `response` is missing, or present but malformed (no string `id`) |
 | 401 | `unknown_credential` — the credential in `response` isn't recognised, or belongs to a different principal |
 | 400 | `binding_mismatch` — the signed challenge does not match this action's hash for the declared decision |
 | 401 | `signature_invalid` — signature verification failed |
@@ -403,7 +416,7 @@ stable across endpoints:
 
 | Code | HTTP status | Condition |
 |---|---|---|
-| `payload_invalid` | 400 | Action payload failed its per-type schema, before hashing |
+| `payload_invalid` | 400 | Request body failed validation — an action payload against its per-type schema (before hashing), or a missing/non-string `principal_id` on the attestation decision routes below |
 | `unknown_principal` | 404 | No principal with the given id |
 | `binding_mismatch` | 400 | The signed WebAuthn challenge does not match the action's `payload_hash` and declared `decision` |
 | `signature_invalid` | 401 | WebAuthn signature verification failed |
@@ -424,7 +437,10 @@ indistinguishable, see that endpoint's section), `invalid_decision` (400,
 `POST /v1/attestations/:id/options` or `.../decision` given a `decision`
 that is missing or isn't `"approve"`/`"deny"`), `unknown_attestation` (404,
 any attestation route given an unknown id), `no_credential` (400, approval
-requested for a principal with no enrolled passkey), `unknown_credential`
-(401, a decision response naming a credential that isn't recognised or
-belongs to someone else), and `registration_failed` /
-`no_pending_registration` (400, passkey registration failures).
+requested for a principal with no enrolled passkey), `signature_required`
+(400, `POST /v1/attestations/:id/decision` given no `response` field, or one
+present but missing a string `id` — one code for both, so a caller can't
+distinguish "sent nothing" from "sent garbage"), `unknown_credential` (401,
+a decision response naming a credential that isn't recognised or belongs to
+someone else), and `registration_failed` / `no_pending_registration` (400,
+passkey registration failures).
