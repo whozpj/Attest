@@ -34,7 +34,7 @@ describe("attack: agent shows one thing and executes another", () => {
   it("gives the attacker a different challenge if they alter the amount", () => {
     const honest = prepareAction(wire);
     const attack = prepareAction({ ...wire, payload: { ...wire.payload, amount: 2500000000 } });
-    expect(challengeFor(attack.payload_hash)).not.toBe(challengeFor(honest.payload_hash));
+    expect(challengeFor(attack.payload_hash, "att_1", "approve")).not.toBe(challengeFor(honest.payload_hash, "att_1", "approve"));
   });
 });
 
