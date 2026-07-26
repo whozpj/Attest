@@ -47,6 +47,11 @@ test("a denied action issues no token", async ({ page }) => {
 
   await page.goto("/approve/enrol.html?principal=" + principalId);
   await page.click("#enrol");
+  // Deny now requires a real signed assertion, same as approve, so the
+  // credential must genuinely exist server-side before we drive the deny
+  // ceremony -- unlike the old bare-POST deny, this can no longer race past
+  // enrolment finishing.
+  await expect(page.locator("#status")).toContainText("enrolled");
 
   const created = await fetch(`${BASE}/v1/attestations`, {
     method: "POST", headers: { "content-type": "application/json" },

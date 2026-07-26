@@ -52,7 +52,7 @@ test("a genuine signature over a benign action cannot approve a different, malic
     async ({ attestationId, principalId }) => {
       const optsRes = await fetch(`/v1/attestations/${attestationId}/options`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ principal_id: principalId }),
+        body: JSON.stringify({ principal_id: principalId, decision: "approve" }),
       });
       const optionsJSON = await optsRes.json();
       // Global UMD bundle attached to window by /vendor/simplewebauthn-browser.js.
