@@ -13,26 +13,35 @@ import { RP } from "./config.js";
 
 /**
  * The action hash is the dominant term in the challenge's preimage, alongside
- * the decision being signed. Binding the decision in means an approve and a
- * deny for the same action sign different bytes, so an assertion captured
- * for one can never be replayed as the other — deny is no longer a free,
- * unsigned action an attacker can force on a stranger's pending attestation.
+ * the attestation id and the decision being signed. Binding the decision in
+ * means an approve and a deny for the same action sign different bytes, so
+ * an assertion captured for one can never be replayed as the other — deny is
+ * no longer a free, unsigned action an attacker can force on a stranger's
+ * pending attestation. Binding the attestation id in closes a second,
+ * separate gap: nothing about creating an attestation deduplicates on
+ * payload_hash, so two independently-created attestations can legitimately
+ * carry byte-for-byte identical payload content. Without the attestation id
+ * in the preimage, both would get the identical challenge, and a genuine
+ * signature captured approving one would be valid input for the other —
+ * one human approval redeemable against every attestation sharing that
+ * content. The action hash still dominates the preimage; this is one more
+ * field alongside it, not a replacement for it.
  *
  * `hashToBytes(payloadHash)` below is a pure validation call — it keeps the
  * malformed-hash rejection working, since canonicalizing a malformed string
  * would otherwise silently succeed.
  */
-function boundHash(payloadHash: string, decision: Decision): string {
+function boundHash(payloadHash: string, attestationId: string, decision: Decision): string {
   hashToBytes(payloadHash);
-  return hashCanonical(canonicalize({ act: payloadHash, decision }));
+  return hashCanonical(canonicalize({ act: payloadHash, att: attestationId, decision }));
 }
 
-export function challengeFor(payloadHash: string, decision: Decision): string {
-  return Buffer.from(hashToBytes(boundHash(payloadHash, decision))).toString("base64url");
+export function challengeFor(payloadHash: string, attestationId: string, decision: Decision): string {
+  return Buffer.from(hashToBytes(boundHash(payloadHash, attestationId, decision))).toString("base64url");
 }
 
 export async function beginApproval(
-  db: Database, principalId: string, payloadHash: string, decision: Decision,
+  db: Database, principalId: string, payloadHash: string, attestationId: string, decision: Decision,
 ) {
   const creds = q.getCredentialsFor(db, principalId);
   if (creds.length === 0) {
@@ -43,7 +52,7 @@ export async function beginApproval(
     rpID: RP.id,
     // `.slice()` narrows to Uint8Array<ArrayBuffer>, matching the library's
     // own Uint8Array_ type (ReturnType<Uint8Array['slice']>) under strict mode.
-    challenge: hashToBytes(boundHash(payloadHash, decision)).slice(),
+    challenge: hashToBytes(boundHash(payloadHash, attestationId, decision)).slice(),
     allowCredentials: creds.map((c) => ({ id: c.credential_id })),
     userVerification: "preferred",
   });
@@ -96,6 +105,7 @@ export async function finishApproval(
   db: Database,
   principalId: string,
   payloadHash: string,
+  attestationId: string,
   decision: Decision,
   response: AuthenticationResponseJSON,
 ): Promise<{ client_data_json: string }> {
@@ -128,7 +138,7 @@ export async function finishApproval(
     if ((presentedCount > 0 || cred.sign_count > 0) && presentedCount <= cred.sign_count) {
       const verified = await signatureHolds(response, cred);
       q.audit(db, {
-        attestation_id: null, event: "possible_credential_clone",
+        attestation_id: attestationId, event: "possible_credential_clone",
         actor: principalId,
         detail: `stored=${cred.sign_count} presented=${presentedCount} verified=${verified}`,
       });
@@ -137,7 +147,7 @@ export async function finishApproval(
 
     verification = await verifyAuthenticationResponse({
       response,
-      expectedChallenge: challengeFor(payloadHash, decision),
+      expectedChallenge: challengeFor(payloadHash, attestationId, decision),
       expectedOrigin: RP.origin,
       expectedRPID: RP.id,
       credential: {
@@ -161,7 +171,12 @@ export async function finishApproval(
     // "someone with no key at all guessed a credential ID."
     const verified = await signatureHolds(response, cred);
     q.audit(db, {
-      attestation_id: null, event: "binding_mismatch",
+      // attestation_id: the attestation this rejected decision was actually
+      // submitted against — not necessarily the one, if any, the signed
+      // material was produced for. payload_hash alone no longer identifies
+      // a single attestation (that's the whole point of this fix), so this
+      // column is what makes the row traceable to a specific record.
+      attestation_id: attestationId, event: "binding_mismatch",
       actor: principalId, detail: `hash=${payloadHash} decision=${decision} verified=${verified}`,
     });
     throw new FailClosedError("binding_mismatch", 400, "signed challenge does not match action");
@@ -173,7 +188,7 @@ export async function finishApproval(
     // literally what this branch measures. Recorded for a uniform audit-row
     // shape, not because there's any ambiguity to resolve.
     q.audit(db, {
-      attestation_id: null, event: "signature_invalid",
+      attestation_id: attestationId, event: "signature_invalid",
       actor: principalId, detail: "verified=false",
     });
     throw new FailClosedError("signature_invalid", 401, "signature verification failed");

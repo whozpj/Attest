@@ -63,67 +63,87 @@ beforeEach(() => {
 });
 
 describe("challengeFor", () => {
-  it("is deterministic for the same action and decision", () => {
-    expect(challengeFor(hash, "approve")).toBe(challengeFor(hash, "approve"));
+  it("is deterministic for the same action, attestation, and decision", () => {
+    expect(challengeFor(hash, "att_1", "approve")).toBe(challengeFor(hash, "att_1", "approve"));
   });
 
   it("differs for different actions", () => {
-    expect(challengeFor(hash, "approve"))
-      .not.toBe(challengeFor(hashCanonical('{"amount":1}'), "approve"));
+    expect(challengeFor(hash, "att_1", "approve"))
+      .not.toBe(challengeFor(hashCanonical('{"amount":1}'), "att_1", "approve"));
   });
 
-  it("differs for approve vs deny on the same action", () => {
-    expect(challengeFor(hash, "approve")).not.toBe(challengeFor(hash, "deny"));
+  it("differs for approve vs deny on the same action and attestation", () => {
+    expect(challengeFor(hash, "att_1", "approve")).not.toBe(challengeFor(hash, "att_1", "deny"));
   });
 
-  it("is identical for the same action and decision pair", () => {
-    expect(challengeFor(hash, "deny")).toBe(challengeFor(hash, "deny"));
+  it("differs for different attestations sharing the same action and decision", () => {
+    // The fix this round: two attestations that happen to carry identical
+    // payload content (and therefore the identical payload_hash) must not
+    // collide on the challenge — otherwise a signature captured approving
+    // one attestation is valid input for a completely different one.
+    expect(challengeFor(hash, "att_1", "approve")).not.toBe(challengeFor(hash, "att_2", "approve"));
+  });
+
+  it("produces four distinct challenges across two attestations and two decisions", () => {
+    const challenges = new Set([
+      challengeFor(hash, "att_1", "approve"),
+      challengeFor(hash, "att_1", "deny"),
+      challengeFor(hash, "att_2", "approve"),
+      challengeFor(hash, "att_2", "deny"),
+    ]);
+    expect(challenges.size).toBe(4);
   });
 
   it("rejects a malformed action hash", () => {
-    expect(() => challengeFor("sha256:nope", "approve")).toThrow(/malformed hash/);
+    expect(() => challengeFor("sha256:nope", "att_1", "approve")).toThrow(/malformed hash/);
   });
 });
 
 describe("beginApproval", () => {
-  it("uses the bound (action, decision) hash as the challenge, not a random value", async () => {
-    const opts = await beginApproval(db, "prin_1", hash, "approve");
-    expect(opts.challenge).toBe(challengeFor(hash, "approve"));
+  it("uses the bound (action, attestation, decision) hash as the challenge, not a random value", async () => {
+    const opts = await beginApproval(db, "prin_1", hash, "att_1", "approve");
+    expect(opts.challenge).toBe(challengeFor(hash, "att_1", "approve"));
   });
 
-  it("produces a different challenge for deny than for approve on the same action", async () => {
-    const approve = await beginApproval(db, "prin_1", hash, "approve");
-    const deny = await beginApproval(db, "prin_1", hash, "deny");
+  it("produces a different challenge for deny than for approve on the same action and attestation", async () => {
+    const approve = await beginApproval(db, "prin_1", hash, "att_1", "approve");
+    const deny = await beginApproval(db, "prin_1", hash, "att_1", "deny");
     expect(approve.challenge).not.toBe(deny.challenge);
   });
 
-  it("is deterministic for the same action and decision", async () => {
-    const a = await beginApproval(db, "prin_1", hash, "approve");
-    const b = await beginApproval(db, "prin_1", hash, "approve");
+  it("produces a different challenge for a different attestation sharing the same action and decision", async () => {
+    const a = await beginApproval(db, "prin_1", hash, "att_1", "approve");
+    const b = await beginApproval(db, "prin_1", hash, "att_2", "approve");
+    expect(a.challenge).not.toBe(b.challenge);
+  });
+
+  it("is deterministic for the same action, attestation, and decision", async () => {
+    const a = await beginApproval(db, "prin_1", hash, "att_1", "approve");
+    const b = await beginApproval(db, "prin_1", hash, "att_1", "approve");
     expect(a.challenge).toBe(b.challenge);
   });
 
   it("restricts to the principal's own credentials", async () => {
-    const opts = await beginApproval(db, "prin_1", hash, "approve");
+    const opts = await beginApproval(db, "prin_1", hash, "att_1", "approve");
     expect(opts.allowCredentials?.map((c) => c.id)).toEqual(["YWJj"]);
   });
 
   it("rejects a principal with no enrolled credential", async () => {
     q.insertPrincipal(db, { id: "prin_2", email: "c@d.test", display_name: "C" });
-    await expect(beginApproval(db, "prin_2", hash, "approve")).rejects.toThrow(/no enrolled credential/);
+    await expect(beginApproval(db, "prin_2", hash, "att_1", "approve")).rejects.toThrow(/no enrolled credential/);
   });
 
   it("rejects a malformed action hash", async () => {
-    await expect(beginApproval(db, "prin_1", "sha256:nope", "approve")).rejects.toThrow(/malformed hash/);
+    await expect(beginApproval(db, "prin_1", "sha256:nope", "att_1", "approve")).rejects.toThrow(/malformed hash/);
   });
 });
 
 describe("finishApproval", () => {
   it("reports a counter regression as possible_credential_clone, not binding_mismatch", async () => {
     q.updateSignCount(db, "YWJj", 5);
-    const response = assertion(3, challengeFor(hash, "approve"));
+    const response = assertion(3, challengeFor(hash, "att_1", "approve"));
 
-    await expect(finishApproval(db, "prin_1", hash, "approve", response))
+    await expect(finishApproval(db, "prin_1", hash, "att_1", "approve", response))
       .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
 
     const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
@@ -141,7 +161,7 @@ describe("finishApproval", () => {
     // wrong challenge, so this must fail the binding check instead.
     const response = assertion(1, "not-the-real-challenge");
 
-    await expect(finishApproval(db, "prin_1", hash, "approve", response))
+    await expect(finishApproval(db, "prin_1", hash, "att_1", "approve", response))
       .rejects.toMatchObject({ code: "binding_mismatch", httpStatus: 400 });
 
     const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
@@ -166,10 +186,10 @@ describe("finishApproval", () => {
     });
     q.updateSignCount(db, cred.credentialId, 42);
 
-    const challenge = challengeFor(hash, "approve");
+    const challenge = challengeFor(hash, "att_1", "approve");
     const response = signAssertion(cred, challenge, 1); // genuinely signed, counter=1 < stored 42
 
-    await expect(finishApproval(db, "prin_1", hash, "approve", response))
+    await expect(finishApproval(db, "prin_1", hash, "att_1", "approve", response))
       .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
 
     const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
@@ -177,5 +197,34 @@ describe("finishApproval", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.event).toBe("possible_credential_clone");
     expect(events[0]?.detail).toBe("stored=42 presented=1 verified=true");
+  });
+
+  it("rejects a signature captured for one attestation when submitted against a different attestation sharing the same payload", async () => {
+    // The central finding this round: two independently-created attestations
+    // can legitimately carry identical payload content (hence identical
+    // payload_hash). Before this fix, the challenge depended only on
+    // (payload_hash, decision), so a genuine signature captured approving
+    // attestation "att_1" was cryptographically valid input for a totally
+    // separate "att_2" that merely happens to share the same payload — one
+    // human approval, redeemable against every attestation with that
+    // content. Binding the attestation id into the preimage closes this: a
+    // signature captured for one attestation cannot be replayed against
+    // another, even when both cover byte-for-byte the same action.
+    const cred = makeFakeCredential();
+    q.insertCredential(db, {
+      id: "cred_real", principal_id: "prin_1",
+      credential_id: cred.credentialId, public_key: cred.publicKeyCose, transports: null,
+    });
+
+    const optionsForA = await beginApproval(db, "prin_1", hash, "att_1", "approve");
+    const signedForA = signAssertion(cred, optionsForA.challenge, 1);
+
+    await expect(finishApproval(db, "prin_1", hash, "att_2", "approve", signedForA))
+      .rejects.toMatchObject({ code: "binding_mismatch", httpStatus: 400 });
+
+    // And the honest case must still work: the same signature, submitted
+    // against the attestation it was actually signed for, succeeds.
+    const finished = await finishApproval(db, "prin_1", hash, "att_1", "approve", signedForA);
+    expect(finished.client_data_json).toContain(optionsForA.challenge);
   });
 });
