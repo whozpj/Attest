@@ -11,10 +11,15 @@ service canonicalizes the payload, hashes it, and renders a human-readable
 summary from that same canonical form — the agent never supplies display
 text. A registered human is asked to approve or deny the rendered summary.
 
-The approval itself is a WebAuthn ceremony in which the **challenge is the
-action's hash**, not a random nonce. That means the authenticator's signature
-covers the specific action, not just "a human was present." The service
-issues an ES256 JWS whose `act` claim carries that hash, signed with a key
+The approval itself is a WebAuthn ceremony in which the **challenge is
+derived from the action's hash**, not a random nonce: specifically, the hash
+of the canonicalized pair `{ act: payload_hash, decision }`, where `decision`
+is `approve` or `deny`. Binding the decision into the challenge (rather than
+signing the bare action hash for both) means an approve and a deny for the
+same action sign different bytes, so a signature captured for one can never
+be replayed as the other. Either way, the authenticator's signature covers
+the specific action, not just "a human was present." The service issues an
+ES256 JWS whose `act` claim carries the plain action hash, signed with a key
 whose public half is published at `/.well-known/jwks.json`. Anyone holding
 the token can verify it offline against that key, without calling back to
 this service.
@@ -25,6 +30,13 @@ authenticator itself. The binding proves the authenticator signed this
 action hash and that the agent supplied no display text of its own — it does
 not prove comprehension. See `docs/human-attest-mvp.md` for the full threat
 model.
+
+The service stores the canonicalized payload only long enough to render the
+summary and check the signature against it. Once an attestation resolves —
+approved, denied, or expired, whichever happens first and however it's
+first observed (a decision or just a poll) — the payload is purged and only
+`payload_hash` is retained, forever. It is not a permanent store of wire
+amounts, recipient names, or email bodies.
 
 ## Prerequisites
 

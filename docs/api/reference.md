@@ -204,6 +204,18 @@ underlying payload is purged from storage on resolution, so only
 `payload_hash` survives. `token` is populated only once `status` is
 `approved`.
 
+**Purge timing.** The payload is purged the first time resolution is
+*observed*, not the first time it happens to be decided. An `approve` or
+`deny` purges it immediately, same as before. An attestation that simply
+times out with nobody ever calling `decision` on it is purged on the next
+`GET` that notices the TTL has elapsed — including this one: if this
+response is the read that first observes `expired`, it already reflects the
+purge (`summary: null`), not the pre-purge state. There is no window where a
+timed-out attestation sits retaining its payload because nobody happened to
+poll it at the right moment; the retention guarantee holds on read, not on a
+background job. `payload_hash` is retained forever regardless of which of
+the three terminal states purged it.
+
 **Status codes**
 
 | Status | Meaning |
@@ -215,20 +227,29 @@ underlying payload is purged from storage on resolution, so only
 
 ### `POST /v1/attestations/:id/options`
 
-Begins the WebAuthn authentication ceremony for one principal's approval of
-this attestation. The action's `payload_hash` is used as the WebAuthn
-**challenge** — this is the mechanism that binds the authenticator's
-signature to this specific action rather than a generic presence check.
+Begins the WebAuthn authentication ceremony for one principal's decision on
+this attestation — **approve or deny alike; both are signed ceremonies.**
+The WebAuthn **challenge** is derived from the action's `payload_hash`
+*and* the `decision` you declare here: it's the hash of the canonicalized
+pair `{ act: payload_hash, decision }`. You must say which decision you're
+about to sign for before the ceremony starts, because approve and deny get
+different challenges for the same attestation — that's what stops a
+signature captured for one from being replayable as the other.
 
 **Request body**
 
 ```json
-{ "principal_id": "prin_abc123" }
+{ "principal_id": "prin_abc123", "decision": "approve" }
 ```
+
+`decision` is required here too (not just on the `/decision` call below) —
+the challenge can't be generated without knowing which decision it's for.
 
 **Response** — `200 OK`, a `PublicKeyCredentialRequestOptionsJSON` object.
 `allowCredentials` is restricted to the calling principal's own enrolled
-credentials.
+credentials. Calling this twice for the same attestation and principal with
+`decision: "approve"` and then `decision: "deny"` returns two different
+`challenge` values.
 
 **Status codes**
 
@@ -236,17 +257,20 @@ credentials.
 |---|---|
 | 200 | Options generated |
 | 404 | `unknown_attestation` |
+| 400 | `invalid_decision` — `decision` missing or not `"approve"`/`"deny"` |
 | 400 | `no_credential` — the principal has no enrolled passkey |
 
 ---
 
 ### `POST /v1/attestations/:id/decision`
 
-Records one principal's approve or deny decision. Resolution depends on
-`required_approvals` (N-of-M quorum): the attestation stays `pending` until
-enough approvals accumulate, and a single `deny` from any listed approver
-resolves the whole attestation to `denied` immediately, discarding any
-approvals already recorded.
+Records one principal's approve or deny decision — **both require a
+verified WebAuthn signature over the decision-bound challenge from the
+`/options` call above; there is no unsigned path for either.** Resolution
+depends on `required_approvals` (N-of-M quorum): the attestation stays
+`pending` until enough approvals accumulate, and a single verified `deny`
+from any listed approver resolves the whole attestation to `denied`
+immediately, discarding any approvals already recorded.
 
 **Request body — approve**
 
@@ -261,13 +285,17 @@ approvals already recorded.
 **Request body — deny**
 
 ```json
-{ "principal_id": "prin_abc123", "decision": "deny" }
+{
+  "principal_id": "prin_abc123",
+  "decision": "deny",
+  "response": { "...": "the AuthenticationResponseJSON from startAuthentication" }
+}
 ```
 
-**Note:** `deny` does not require a `response` field and is not verified
-against any WebAuthn signature — only `approve` is bound to the action hash
-this way. A `deny` is authenticated by nothing beyond knowing the
-`principal_id`. See [known gaps](#known-gaps).
+Both shapes are identical apart from `decision`. `response` must be the
+assertion produced against the `challenge` this same principal obtained from
+`/options` with the *same* `decision` — a `response` signed against the
+approve-challenge will not verify as a deny, and vice versa.
 
 **Response** — `200 OK`
 
@@ -283,13 +311,18 @@ this way. A `deny` is authenticated by nothing beyond knowing the
 |---|---|
 | 200 | Decision recorded (whatever the resulting status) |
 | 404 | `unknown_attestation` |
-| 401 | `unknown_credential` — the credential in `response` isn't recognised, or belongs to a different principal (approve only) |
-| 400 | `binding_mismatch` — the signed challenge does not match this action's hash (approve only) |
-| 401 | `signature_invalid` — signature verification failed (approve only) |
-| 401 | `counter_regression` — the authenticator's signature counter went backwards, a cloned-credential signal (approve only) |
+| 400 | `invalid_decision` — `decision` missing or not `"approve"`/`"deny"` |
+| 401 | `unknown_credential` — the credential in `response` isn't recognised, or belongs to a different principal |
+| 400 | `binding_mismatch` — the signed challenge does not match this action's hash for the declared decision |
+| 401 | `signature_invalid` — signature verification failed |
+| 401 | `counter_regression` — the authenticator's signature counter went backwards, a cloned-credential signal |
 | 410 | `expired` — the attestation's TTL has elapsed |
 | 409 | `already_resolved` — the attestation is already `approved`, `denied`, or `expired` |
 | 403 | `not_an_approver` — this principal is not in `approver_ids` for this attestation |
+
+A rejected decision (any 4xx/401 above) never resolves the attestation — an
+attacker who can't produce a valid signature can't force it to `denied` by
+throwing failed attempts at this endpoint; it stays `pending`.
 
 ---
 
@@ -372,7 +405,7 @@ stable across endpoints:
 |---|---|---|
 | `payload_invalid` | 400 | Action payload failed its per-type schema, before hashing |
 | `unknown_principal` | 404 | No principal with the given id |
-| `binding_mismatch` | 400 | The signed WebAuthn challenge does not match the action's `payload_hash` |
+| `binding_mismatch` | 400 | The signed WebAuthn challenge does not match the action's `payload_hash` and declared `decision` |
 | `signature_invalid` | 401 | WebAuthn signature verification failed |
 | `counter_regression` | 401 | Authenticator signature counter went backwards (possible cloned credential) |
 | `not_an_approver` | 403 | Principal is not in the attestation's `approver_ids` |
@@ -387,26 +420,11 @@ A few additional codes appear in specific routes and are not part of the
 stable table above, because they concern registration and lookup rather than
 the attestation/approval binding: `principal_invalid` (400, `POST
 /v1/principals` given a malformed body or a duplicate email — deliberately
-indistinguishable, see that endpoint's section), `unknown_attestation` (404,
+indistinguishable, see that endpoint's section), `invalid_decision` (400,
+`POST /v1/attestations/:id/options` or `.../decision` given a `decision`
+that is missing or isn't `"approve"`/`"deny"`), `unknown_attestation` (404,
 any attestation route given an unknown id), `no_credential` (400, approval
 requested for a principal with no enrolled passkey), `unknown_credential`
-(401, an approval response naming a credential that isn't recognised or
+(401, a decision response naming a credential that isn't recognised or
 belongs to someone else), and `registration_failed` /
 `no_pending_registration` (400, passkey registration failures).
-
-## Known gaps
-
-Documenting this API surfaced one thing worth flagging rather than papering
-over, still open as of this writing:
-
-**`deny` requires no proof of identity.** Approving an attestation is bound
-to a WebAuthn signature over the action hash; denying one is not — it
-succeeds for any `principal_id` listed in `approver_ids`, with no credential
-check at all (see the request body for
-[`POST /v1/attestations/:id/decision`](#post-v1attestationsiddecision)). For
-a single-approver attestation this means anyone who knows (or guesses) the
-approver's principal id can deny their pending action. This is a plausible
-product decision — a false denial is an availability problem, not a security
-one, on the theory that a dissenting approver should never need to prove
-more than a dissenting vote — but it is not stated anywhere as a decision, so
-it currently reads as an oversight rather than a choice.

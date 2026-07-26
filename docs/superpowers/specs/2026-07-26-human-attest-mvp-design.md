@@ -187,17 +187,37 @@ Enforced structurally:
    `payload_hash`.
 4. `actions/render` produces `RenderedSummary` **from the canonical JSON**, via
    a per-type template. There is no code path where the caller influences it.
-5. The WebAuthn authentication ceremony uses `payload_hash` as its
-   **challenge**, so the hash lands inside signed `clientDataJSON`.
-6. At **approval time**, the server recomputes the hash from stored
-   `canonical_json` and compares it to the challenge inside `clientDataJSON`.
-   At **verify time** — after the payload has been purged — the token's `act`
-   claim is compared against the retained `payload_hash`. Either mismatch fails
-   closed.
+5. The WebAuthn authentication ceremony's **challenge** is derived from
+   `payload_hash`, not equal to it: the challenge is
+   `hash(canonicalize({ act: payload_hash, decision }))`, RFC 8785-canonicalized
+   and hashed the same way as an action payload, where `decision` is the
+   closed enum `"approve" | "deny"` being recorded. `payload_hash` is still the
+   dominant term — it is still what ties the signature to *this action* — but
+   folding `decision` into the same preimage means the hash lands inside
+   signed `clientDataJSON` for both approve and deny, not just approve.
+6. At **decision time** — for both `approve` and `deny`, not `approve` alone —
+   the server recomputes the expected challenge from the stored
+   `canonical_json` and the decision being submitted, and compares it to the
+   challenge inside `clientDataJSON`. At **verify time** — after the payload
+   has been purged — the token's `act` claim is compared against the retained
+   `payload_hash` directly; `act` is always the plain action hash, never the
+   bound challenge hash, so offline verification is unaffected by any of this.
+   Either mismatch fails closed.
 
-Step 5 is the crux: WebAuthn already signs its challenge, so binding approval to
-the action needs no novel cryptography — it needs the challenge to *be* the
-action hash.
+Step 5 is the crux, and why `decision` is bound in rather than left out deserves
+recording: WebAuthn already signs its challenge, so binding a decision to the
+action needs no novel cryptography — it needs the challenge to *be derived
+from* the action hash. The obvious simpler fix — require a signature over the
+bare action hash for `deny` too, same as `approve` — was rejected, because it
+would make the two decisions sign identical bytes for the same action. That
+makes them cryptographically interchangeable: an assertion captured during a
+`deny` could be replayed as an `approve` for the same action, which is strictly
+worse than the gap it would close (an unauthenticated `deny`). Folding
+`decision` into the challenge's preimage gives `approve` and `deny` on the same
+action distinct, non-interchangeable challenges, so a signature over one can
+never stand in for the other. **Do not simplify this back to a bare
+`payload_hash` challenge shared by both decisions** — that reintroduces the
+interchangeability this section exists to rule out.
 
 **Honest limit.** WebAuthn cannot display transaction text; authenticators sign
 opaque bytes. The binding proves the authenticator signed *this action hash*,
