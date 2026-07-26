@@ -30,8 +30,24 @@
 
   document.getElementById("headline").textContent =
     att.summary ? att.summary.headline : `Attestation is ${att.status}`;
-  document.getElementById("fields").innerHTML = (att.summary?.fields ?? [])
-    .map((f) => `<dt>${f.label}</dt><dd>${f.value}</dd>`).join("");
+
+  // f.label and f.value are caller-controlled payload text (recipient_name,
+  // subject, title, detail, document_name, ...). The closed-world validator
+  // only constrains which *fields* exist, never the contents of a legitimate
+  // string field, so this data must be treated as hostile. String-building
+  // HTML and assigning it via innerHTML would let a crafted field turn into
+  // markup the human reads instead of the value that was actually hashed and
+  // signed -- textContent is the only assignment that cannot be interpreted
+  // as markup, no matter what the string contains.
+  const fieldsList = document.getElementById("fields");
+  fieldsList.replaceChildren();
+  for (const f of att.summary?.fields ?? []) {
+    const dt = document.createElement("dt");
+    dt.textContent = f.label;
+    const dd = document.createElement("dd");
+    dd.textContent = f.value;
+    fieldsList.append(dt, dd);
+  }
 
   // Approve and deny both require a signed WebAuthn assertion: the challenge
   // is bound to (action hash, decision), so a signature captured for one
