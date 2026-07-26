@@ -88,6 +88,24 @@ export async function recordDecision(
     mth: att.required_approvals > 1 ? "passkey_multi" : "passkey",
   }, TOKEN_TTL_SECONDS);
 
+  // `await` above is a yield point inside the critical section: better-sqlite3
+  // is synchronous, but Fastify can serve another decision request while this
+  // one is suspended signing. A concurrent denial commits immediately (no
+  // await in its path), and a concurrent approval reaching quorum first can
+  // commit its own token first too. Either way, "terminal is terminal" means
+  // we must not blindly overwrite whatever was committed while we were away.
+  // This re-check and the write below are the only remaining statements in
+  // this function - no further await separates them from each other, so on a
+  // single JS thread nothing can interleave between the check and the commit.
+  if (effectiveStatus(db, attestationId) !== "pending") {
+    const resolved = q.getAttestation(db, attestationId)!;
+    q.audit(db, {
+      attestation_id: attestationId, event: "stale_resolution_discarded",
+      actor: principalId, detail: `computed=approved actual=${resolved.status}`,
+    });
+    return { status: resolved.status, token: resolved.token };
+  }
+
   q.setAttestationResolved(db, attestationId, "approved", token);
   q.purgeActionPayload(db, att.action_id);
   q.audit(db, { attestation_id: attestationId, event: "attestation_approved", actor: principalId, detail: null });
