@@ -355,6 +355,18 @@ independent check of the actual signature against the credential's stored
 public key. `verified=true` means a real key was behind the rejection;
 `verified=false` means it wasn't. This field is not exposed through any API
 response — it's visible only to whoever can read the database directly.
+
+**Say this plainly, because it's easy to over-read:** the `counter_regression`
+response (and its internal audit event, `possible_credential_clone` — a
+harder-sounding name than the wire code) only indicates a genuinely detected
+cloned or behind-schedule authenticator when the matching audit row has
+`verified=true`. A `possible_credential_clone` row with `verified=false` is
+an unauthenticated probe — anyone can produce those, cheaply, with no key at
+all. Whoever reviews this audit log should filter on `verified` before
+treating a `possible_credential_clone` row as evidence a real credential was
+compromised; treating every occurrence as a compromised authenticator means
+chasing ghosts.
+
 `signature_invalid`'s audit row carries the same `detail` field for a
 uniform shape, always `verified=false` there — but with no ambiguity to
 resolve, since reaching that branch already means the real signature check
