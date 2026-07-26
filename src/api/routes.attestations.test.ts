@@ -122,6 +122,94 @@ describe("POST /v1/attestations/:id/decision requires a real signature for deny 
   });
 });
 
+function auditRows(): Array<{ event: string; attestation_id: string | null; actor: string | null }> {
+  return app.ctx.db.prepare("SELECT event, attestation_id, actor FROM audit_log").all() as Array<{
+    event: string; attestation_id: string | null; actor: string | null;
+  }>;
+}
+
+describe("POST /v1/attestations/:id/decision fails closed on a missing signature, not a crash", () => {
+  it("rejects a deny with no response field at all — the exact attack: attestation_id + principal_id only", async () => {
+    const principal_id = await createPrincipalWithCredential("nosig-deny@test.local");
+    const attestation_id = await createAttestation(principal_id);
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/decision`,
+      payload: { principal_id, decision: "deny" },
+    });
+
+    // Must be a typed rejection, not the raw TypeError-turned-500 that
+    // `response.id` on `undefined` used to produce.
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "signature_required", message: expect.any(String) });
+
+    // The requirement that actually broke: a rejection with zero trace.
+    expect(auditRows().some((r) => r.event === "signature_required" && r.attestation_id === attestation_id))
+      .toBe(true);
+
+    const check = await app.inject({ method: "GET", url: `/v1/attestations/${attestation_id}` });
+    expect(check.json().status).toBe("pending");
+  });
+
+  it("rejects a response that is present but malformed (no id), same opaque code as missing", async () => {
+    const principal_id = await createPrincipalWithCredential("malformed-response@test.local");
+    const attestation_id = await createAttestation(principal_id);
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/decision`,
+      payload: { principal_id, decision: "approve", response: { notAnId: true } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("signature_required");
+    expect(auditRows().some((r) => r.event === "signature_required")).toBe(true);
+  });
+
+  it("rejects a non-object response (string) the same way", async () => {
+    const principal_id = await createPrincipalWithCredential("string-response@test.local");
+    const attestation_id = await createAttestation(principal_id);
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/decision`,
+      payload: { principal_id, decision: "approve", response: "not-an-object" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("signature_required");
+  });
+});
+
+describe("principal_id is validated at the boundary, not assumed present", () => {
+  it("POST .../decision rejects a missing principal_id with a typed error and an audit row", async () => {
+    const principal_id = await createPrincipalWithCredential("missing-pid-decision@test.local");
+    const attestation_id = await createAttestation(principal_id);
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/decision`,
+      payload: { decision: "deny", response: { id: "whatever" } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("payload_invalid");
+    expect(auditRows().some((r) => r.event === "payload_invalid" && r.attestation_id === attestation_id))
+      .toBe(true);
+
+    const check = await app.inject({ method: "GET", url: `/v1/attestations/${attestation_id}` });
+    expect(check.json().status).toBe("pending");
+  });
+
+  it("POST .../options rejects a missing principal_id with a typed error and an audit row", async () => {
+    const principal_id = await createPrincipalWithCredential("missing-pid-options@test.local");
+    const attestation_id = await createAttestation(principal_id);
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { decision: "approve" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("payload_invalid");
+    expect(auditRows().some((r) => r.event === "payload_invalid" && r.attestation_id === attestation_id))
+      .toBe(true);
+  });
+});
+
 describe("GET /v1/attestations/:id on an expired attestation", () => {
   it("does not leak the summary from the very read that expires it", async () => {
     const principal = await app.inject({
