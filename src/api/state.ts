@@ -39,19 +39,17 @@ export async function recordDecision(
   const att = q.getAttestation(db, attestationId)!;
   const status = effectiveStatus(db, attestationId);
 
+  // effectiveStatus has already persisted an expiry transition and purged the
+  // payload on first observation. Both rejections below are audited
+  // centrally, in server.ts's error handler, along with every other
+  // FailClosedError in the app.
   if (status === "expired") {
-    // effectiveStatus has already persisted the transition and purged the
-    // payload on first observation; this audit event is specifically about
-    // the decision attempt itself, distinct from passive expiry detection.
-    q.audit(db, { attestation_id: attestationId, event: "decision_after_expiry", actor: principalId, detail: null });
     throw new FailClosedError("expired", 410, "attestation has expired");
   }
   if (status !== "pending") {
-    q.audit(db, { attestation_id: attestationId, event: "decision_after_resolution", actor: principalId, detail: status });
     throw new FailClosedError("already_resolved", 409, `attestation already resolved: ${status}`);
   }
   if (!att.approver_ids.includes(principalId)) {
-    q.audit(db, { attestation_id: attestationId, event: "unauthorised_approver", actor: principalId, detail: null });
     throw new FailClosedError("not_an_approver", 403, "principal is not an approver for this attestation");
   }
 

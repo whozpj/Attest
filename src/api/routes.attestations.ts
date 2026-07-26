@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import type { Database } from "better-sqlite3";
 import type { AppContext } from "./server.js";
 import * as q from "../db/queries.js";
 import { prepareAction, renderSummary } from "../actions/render.js";
@@ -21,16 +20,11 @@ function assertDecision(decision: unknown): asserts decision is Decision {
  * on a helper's incidental non-crashing behaviour (a query lib's undefined
  * bind decision, e.g.) is not the same thing as a documented, audited
  * rejection. A malformed request is a rejection like any other: it gets a
- * typed FailClosedError and an audit_log row, every time.
+ * typed FailClosedError, and server.ts's central error handler gives it an
+ * audit_log row the same as every other rejection in the app.
  */
-function assertPrincipalId(
-  db: Database, attestationId: string, principalId: unknown,
-): asserts principalId is string {
+function assertPrincipalId(principalId: unknown): asserts principalId is string {
   if (typeof principalId !== "string" || principalId.length === 0) {
-    q.audit(db, {
-      attestation_id: attestationId, event: "payload_invalid", actor: null,
-      detail: "missing or malformed principal_id",
-    });
     throw new FailClosedError("payload_invalid", 400, "principal_id is required");
   }
 }
@@ -43,13 +37,10 @@ function assertPrincipalId(
  * "malformed" alike, matching the enrolment-enumeration reasoning: an
  * attacker probing this endpoint should not be able to tell the two apart.
  */
-function assertSignedResponse(
-  db: Database, attestationId: string, actor: string, response: unknown,
-): asserts response is { id: string } {
+function assertSignedResponse(response: unknown): asserts response is { id: string } {
   const hasId = typeof response === "object" && response !== null
     && typeof (response as { id?: unknown }).id === "string";
   if (!hasId) {
-    q.audit(db, { attestation_id: attestationId, event: "signature_required", actor, detail: null });
     throw new FailClosedError("signature_required", 400, "a signed assertion is required");
   }
 }
@@ -120,7 +111,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     // ceremony even starts, which is what makes a captured deny-assertion
     // unusable as a replayed approval and vice versa.
     assertDecision(body.decision);
-    assertPrincipalId(db, id, body.principal_id);
+    assertPrincipalId(body.principal_id);
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
     const action = q.getAction(db, att.action_id)!;
@@ -131,11 +122,11 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     const { id } = req.params as { id: string };
     const body = req.body as { principal_id?: unknown; decision?: unknown; response?: unknown };
     assertDecision(body.decision);
-    assertPrincipalId(db, id, body.principal_id);
+    assertPrincipalId(body.principal_id);
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
     const action = q.getAction(db, att.action_id)!;
-    assertSignedResponse(db, id, body.principal_id, body.response);
+    assertSignedResponse(body.response);
 
     // finishApproval runs for both decisions, unconditionally: deny requires
     // exactly the same signed proof as approve now. A decision recorded

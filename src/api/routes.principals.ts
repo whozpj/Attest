@@ -4,6 +4,7 @@ import type { AppContext } from "./server.js";
 import * as q from "../db/queries.js";
 import { beginRegistration, finishRegistration } from "../webauthn/registration.js";
 import { FailClosedError } from "../types.js";
+import { withAuditDetail } from "./audit-detail.js";
 
 const pendingChallenges = new Map<string, string>();
 
@@ -13,28 +14,28 @@ export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext
     const email = body.email;
     const display_name = body.display_name;
 
-    // One opaque code for both a malformed body and a duplicate email.
-    // Spec's "say why without leaking" principle: a distinct duplicate-email
-    // error would be an account-enumeration vector on an enrolment endpoint.
-    // The audit detail records which it actually was, server-side only.
+    // One opaque code and message for both a malformed body and a duplicate
+    // email. Spec's "say why without leaking" principle: a distinct
+    // duplicate-email error would be an account-enumeration vector on an
+    // enrolment endpoint. The audit row (written centrally, in server.ts's
+    // error handler) still records which one actually happened via
+    // withAuditDetail — server-side only, never echoed in the response.
     if (typeof email !== "string" || email.length === 0 ||
         typeof display_name !== "string" || display_name.length === 0) {
-      q.audit(app.ctx.db, {
-        attestation_id: null, event: "principal_invalid", actor: null,
-        detail: "malformed enrolment body",
-      });
-      throw new FailClosedError("principal_invalid", 400, "email and display_name are required");
+      throw withAuditDetail(
+        new FailClosedError("principal_invalid", 400, "email and display_name are required"),
+        "malformed enrolment body",
+      );
     }
 
     const id = `prin_${randomUUID()}`;
     try {
       q.insertPrincipal(app.ctx.db, { id, email, display_name });
     } catch {
-      q.audit(app.ctx.db, {
-        attestation_id: null, event: "principal_invalid", actor: null,
-        detail: `duplicate email: ${email}`,
-      });
-      throw new FailClosedError("principal_invalid", 400, "email and display_name are required");
+      throw withAuditDetail(
+        new FailClosedError("principal_invalid", 400, "email and display_name are required"),
+        `duplicate email: ${email}`,
+      );
     }
     return reply.status(201).send({ principal_id: id });
   });
@@ -50,9 +51,6 @@ export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext
     const { id } = req.params as { id: string };
     const challenge = pendingChallenges.get(id);
     if (!challenge) {
-      q.audit(app.ctx.db, {
-        attestation_id: null, event: "no_pending_registration", actor: id, detail: null,
-      });
       throw new FailClosedError(
         "no_pending_registration", 400, "no pending registration challenge for this principal",
       );

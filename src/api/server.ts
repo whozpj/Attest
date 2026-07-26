@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { openDb, type Database } from "../db/index.js";
 import { loadOrCreateKeypair, type Keypair } from "../crypto/tokens.js";
+import * as q from "../db/queries.js";
 import { FailClosedError } from "../types.js";
+import { auditDetailOf } from "./audit-detail.js";
 import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";
@@ -43,8 +45,47 @@ export async function buildServer(
     reply.sendFile("index.umd.min.js", join(here, "../../node_modules/@simplewebauthn/browser/dist/bundle")),
   );
 
-  app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof FailClosedError) {
+  // Centralized audit logging: this is the one place every rejection in the
+  // app passes through, regardless of which route or module threw it. That
+  // makes it the right choke point for "every rejection writes an
+  // audit_log row" instead of a per-throw-site call sprinkled across
+  // actions/, db/, api/, and webauthn/ that's trivially easy to miss (and
+  // was missed, repeatedly, before this). It also backstops unhandled
+  // exceptions: those still resolve to a generic 500, but they no longer
+  // vanish without a trace either.
+  app.setErrorHandler((err: unknown, req, reply) => {
+    const routeUrl = req.routeOptions?.url ?? "";
+    const params = req.params as Record<string, unknown> | undefined;
+    const body = req.body as Record<string, unknown> | undefined;
+
+    const paramId = typeof params?.id === "string" ? params.id : null;
+    const bodyPrincipalId = typeof body?.principal_id === "string" ? body.principal_id : null;
+
+    // :id means different things on different routes (an attestation_id
+    // under /v1/attestations/:id, a principal_id under
+    // /v1/principals/:id/...) — resolve it against the matched route
+    // pattern rather than guessing from the value alone.
+    const attestationId = routeUrl.startsWith("/v1/attestations/:id") ? paramId : null;
+    const actor = bodyPrincipalId
+      ?? (routeUrl.startsWith("/v1/principals/:id") ? paramId : null);
+
+    const isFailClosed = err instanceof FailClosedError;
+    // A throw site can attach a richer, audit-only explanation (never sent
+    // over HTTP) via `withAuditDetail` below when its generic message would
+    // otherwise flatten two meaningfully different causes — e.g. "malformed
+    // body" vs "duplicate email" behind the same opaque anti-enumeration
+    // response — without that distinction ever reaching the caller.
+    const auditDetail = isFailClosed ? auditDetailOf(err) : undefined;
+    const message = err instanceof Error ? err.message : String(err);
+
+    q.audit(app.ctx.db, {
+      attestation_id: attestationId,
+      event: isFailClosed ? err.code : "internal_error",
+      actor,
+      detail: auditDetail ?? message,
+    });
+
+    if (isFailClosed) {
       return reply.status(err.httpStatus).send({ error: err.code, message: err.message });
     }
     return reply.status(500).send({ error: "internal_error" });

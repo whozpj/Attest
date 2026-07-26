@@ -1,0 +1,100 @@
+// src/api/server.test.ts
+import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildServer } from "./server.js";
+
+let app: Awaited<ReturnType<typeof buildServer>>;
+
+beforeEach(async () => {
+  app = await buildServer({
+    dbPath: ":memory:",
+    keyDir: mkdtempSync(join(tmpdir(), "ha-server-")),
+  });
+});
+
+function auditRows(): Array<{ event: string; actor: string | null; attestation_id: string | null; detail: string | null }> {
+  return app.ctx.db.prepare("SELECT event, actor, attestation_id, detail FROM audit_log").all() as Array<{
+    event: string; actor: string | null; attestation_id: string | null; detail: string | null;
+  }>;
+}
+
+describe("every rejection writes an audit_log row, via the central error handler", () => {
+  it("audits an unknown_attestation 404 on GET, with the attestation_id from the URL", async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/attestations/att_nonexistent" });
+    expect(res.statusCode).toBe(404);
+    expect(auditRows().some((r) => r.event === "unknown_attestation" && r.attestation_id === "att_nonexistent"))
+      .toBe(true);
+  });
+
+  it("audits a payload_invalid rejection from action-schema validation on attestation creation", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: {
+        requested_by: "int", approver_ids: ["prin_x"],
+        action: { type: "not_a_real_type", risk_tier: "low", payload: {} },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(auditRows().some((r) => r.event === "payload_invalid")).toBe(true);
+  });
+
+  it("audits invalid_decision on the options route, with actor derived from principal_id and attestation_id from the URL", async () => {
+    const p = await app.inject({
+      method: "POST", url: "/v1/principals", payload: { email: "a@t.test", display_name: "A" },
+    });
+    const { principal_id } = p.json();
+    const created = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: {
+        requested_by: "int", approver_ids: [principal_id],
+        action: { type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" } },
+      },
+    });
+    const { attestation_id } = created.json();
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { principal_id }, // no decision
+    });
+    expect(res.statusCode).toBe(400);
+    expect(auditRows().some((r) =>
+      r.event === "invalid_decision" && r.attestation_id === attestation_id && r.actor === principal_id,
+    )).toBe(true);
+  });
+
+  it("audits a duplicate-email rejection on principal enrolment, with actor derived from the id param", async () => {
+    const p = await app.inject({
+      method: "POST", url: "/v1/principals", payload: { email: "dup@t.test", display_name: "A" },
+    });
+    const { principal_id } = p.json();
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/principals/${principal_id}/credentials`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(auditRows().some((r) => r.event === "no_pending_registration" && r.actor === principal_id)).toBe(true);
+  });
+
+  it("audits exactly once per rejection — no duplicate row from a leftover per-throw-site call", async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/attestations/att_missing" });
+    expect(res.statusCode).toBe(404);
+    expect(auditRows().filter((r) => r.event === "unknown_attestation")).toHaveLength(1);
+  });
+
+  it("backstops an unhandled, non-FailClosedError exception: audited as internal_error, not silently dropped", async () => {
+    // Registered only for this test, on this test's own fresh app instance,
+    // to verify the backstop independent of which specific route happens to
+    // still have an unaudited crash today (that's Finding 6's job).
+    app.get("/__test/boom", async () => {
+      throw new Error("kaboom");
+    });
+
+    const res = await app.inject({ method: "GET", url: "/__test/boom" });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: "internal_error" });
+    expect(auditRows().some((r) => r.event === "internal_error" && r.detail === "kaboom")).toBe(true);
+  });
+});
