@@ -87,6 +87,59 @@ describe("POST /v1/attestations/:id/options binds the decision into the challeng
   });
 });
 
+describe("POST /v1/attestations/:id/options enforces approver membership", () => {
+  it("refuses a real principal with a real credential who is simply not listed as an approver", async () => {
+    const outsider = await createPrincipalWithCredential("outsider@test.local");
+    const approver = await createPrincipalWithCredential("real-approver@test.local");
+    const attestation_id = await createAttestation(approver); // outsider is NOT in approver_ids
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { principal_id: outsider, decision: "approve" },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("no_credential");
+    // No allowCredentials, no credential IDs, nothing beyond the opaque
+    // rejection — this principal is real and does have a credential, but
+    // none of that should be observable from this attestation's options call.
+    expect(res.json()).not.toHaveProperty("allowCredentials");
+    expect(res.json()).not.toHaveProperty("challenge");
+  });
+
+  it("gives byte-identical responses for a non-approver and a principal that doesn't exist at all", async () => {
+    const approver = await createPrincipalWithCredential("real-approver-2@test.local");
+    const outsider = await createPrincipalWithCredential("outsider-2@test.local");
+    const attestation_id = await createAttestation(approver);
+
+    const nonApproverRes = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { principal_id: outsider, decision: "approve" },
+    });
+    const unknownPrincipalRes = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { principal_id: "prin_does_not_exist", decision: "approve" },
+    });
+
+    expect(nonApproverRes.statusCode).toBe(unknownPrincipalRes.statusCode);
+    expect(nonApproverRes.body).toBe(unknownPrincipalRes.body);
+  });
+
+  it("still issues real options, including allowCredentials, to an actual approver", async () => {
+    const approver = await createPrincipalWithCredential("legit-approver@test.local");
+    const attestation_id = await createAttestation(approver);
+
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { principal_id: approver, decision: "approve" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty("challenge");
+    expect(res.json().allowCredentials?.map((c: { id: string }) => c.id)).toEqual([`credid_${approver}`]);
+  });
+});
+
 describe("POST /v1/attestations/:id/decision requires a real signature for deny too", () => {
   it("rejects a missing decision", async () => {
     const principal_id = await createPrincipalWithCredential("dec-missing@test.local");

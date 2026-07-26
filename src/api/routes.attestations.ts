@@ -114,6 +114,22 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     assertPrincipalId(body.principal_id);
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
+
+    // A caller must be a listed approver for THIS attestation before we hand
+    // out anything — including allowCredentials, which is that principal's
+    // real credential IDs. Without this check, anyone who names a valid
+    // approver's principal_id (not secret — we put it in approve_url
+    // ourselves) could fish out their real credential ID here, then use it
+    // to submit a forged, unsigned assertion that spams the system's
+    // highest-signal security alert (possible_credential_clone) against a
+    // real human's credential. The response is deliberately the exact same
+    // code beginApproval already produces for a principal that doesn't
+    // exist at all (no_credential) — a non-approver must not be
+    // distinguishable from a stranger.
+    if (!att.approver_ids.includes(body.principal_id)) {
+      throw new FailClosedError("no_credential", 400, "principal has no enrolled credential");
+    }
+
     const action = q.getAction(db, att.action_id)!;
     return beginApproval(db, body.principal_id, action.payload_hash, body.decision);
   });

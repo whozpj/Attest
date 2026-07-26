@@ -134,7 +134,20 @@ describe("data retention", () => {
 });
 
 describe("audit trail", () => {
-  it("records every rejection", async () => {
+  // Renamed from "records every rejection" (Reviewer's finding): this test
+  // only ever exercised one rejection, and the old name overclaimed a
+  // guarantee this single case doesn't establish — which is part of why the
+  // audit gaps swept up in unaudited-rejection-sweep.test.ts went unnoticed.
+  //
+  // Per API-State (cf27972, centralized audit-on-rejection): audit rows are
+  // now written once, centrally, in server.ts's HTTP error handler, not at
+  // individual throw sites — state.ts no longer audits not_an_approver
+  // itself. Calling recordDecision directly, below the HTTP boundary, no
+  // longer observes any audit row, so this stays a pure state-machine test
+  // of the rejection itself; unaudited-rejection-sweep.test.ts (driven
+  // through the real HTTP surface) is where "every rejection reaching the
+  // API is audited" is actually checked.
+  it("refuses a decision from a principal outside the declared approver set", async () => {
     q.insertPrincipal(db, { id: "prin_1", email: "a@t.test", display_name: "A" });
     q.insertPrincipal(db, { id: "prin_x", email: "x@t.test", display_name: "X" });
     q.insertAction(db, {
@@ -146,9 +159,6 @@ describe("audit trail", () => {
       approver_ids: ["prin_1"], expires_at: new Date(Date.now() + 60_000).toISOString(),
     });
 
-    await expect(recordDecision(db, kp, "att_1", "prin_x", "approve", "{}")).rejects.toThrow();
-
-    const rows = db.prepare(`SELECT event FROM audit_log WHERE event = 'unauthorised_approver'`).all();
-    expect(rows).toHaveLength(1);
+    await expect(recordDecision(db, kp, "att_1", "prin_x", "approve", "{}")).rejects.toThrow(/not an approver/);
   });
 });
