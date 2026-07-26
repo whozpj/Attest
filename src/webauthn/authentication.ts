@@ -2,6 +2,7 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse,
   type AuthenticationResponseJSON,
 } from "@simplewebauthn/server";
+import { isoBase64URL, parseAuthenticatorData } from "@simplewebauthn/server/helpers";
 import type { Database } from "better-sqlite3";
 import * as q from "../db/queries.js";
 import { canonicalize, hashCanonical, hashToBytes } from "../crypto/canonical.js";
@@ -60,6 +61,33 @@ export async function finishApproval(
 
   let verification;
   try {
+    // The counter-regression check MUST run before verifyAuthenticationResponse,
+    // not after. The library throws internally on the same condition (see
+    // node_modules/@simplewebauthn/server/esm/authentication/verifyAuthenticationResponse.js,
+    // the `(counter > 0 || credential.counter > 0) && counter <= credential.counter`
+    // check), before it ever computes `verified`. A post-hoc check on
+    // `verification.authenticationInfo.newCounter` is therefore unreachable dead
+    // code — every input that would trip it has already thrown into the catch
+    // below and been misreported as `binding_mismatch`, silently disabling
+    // cloned-credential detection (spec §9) and polluting the system's
+    // highest-signal audit event with an unrelated failure mode.
+    //
+    // We reimplement the same regression predicate here, against the library's
+    // own public parsing helpers (`parseAuthenticatorData`/`isoBase64URL` from
+    // `@simplewebauthn/server/helpers`) rather than string-matching its thrown
+    // Error message, which a library upgrade could change without notice.
+    const presentedCount = parseAuthenticatorData(
+      isoBase64URL.toBuffer(response.response.authenticatorData),
+    ).counter;
+
+    if ((presentedCount > 0 || cred.sign_count > 0) && presentedCount <= cred.sign_count) {
+      q.audit(db, {
+        attestation_id: null, event: "possible_credential_clone",
+        actor: principalId, detail: `stored=${cred.sign_count} presented=${presentedCount}`,
+      });
+      throw new FailClosedError("counter_regression", 401, "authenticator counter regressed");
+    }
+
     verification = await verifyAuthenticationResponse({
       response,
       expectedChallenge: challengeFor(payloadHash, decision),
@@ -71,10 +99,16 @@ export async function finishApproval(
         counter: cred.sign_count,
       },
     });
-  } catch {
-    // A challenge mismatch lands here: the human signed a different action
-    // (or a different decision on the same action) than the one being
-    // recorded. Highest-signal event in the system.
+  } catch (err) {
+    // Our own counter-regression throw above is already typed and audited;
+    // let it propagate unchanged rather than relabeling it below.
+    if (err instanceof FailClosedError) throw err;
+
+    // Everything else lands here: challenge mismatch, origin/RPID mismatch, a
+    // malformed response. The human signed a different action (or a different
+    // decision on the same action) than the one being recorded, or the
+    // response was never a valid assertion to begin with. Highest-signal
+    // event in the system.
     q.audit(db, {
       attestation_id: null, event: "binding_mismatch",
       actor: principalId, detail: `hash=${payloadHash} decision=${decision}`,
@@ -87,15 +121,7 @@ export async function finishApproval(
     throw new FailClosedError("signature_invalid", 401, "signature verification failed");
   }
 
-  const newCount = verification.authenticationInfo.newCounter;
-  if (cred.sign_count > 0 && newCount > 0 && newCount <= cred.sign_count) {
-    q.audit(db, {
-      attestation_id: null, event: "possible_credential_clone",
-      actor: principalId, detail: `stored=${cred.sign_count} presented=${newCount}`,
-    });
-    throw new FailClosedError("counter_regression", 401, "authenticator counter regressed");
-  }
-  q.updateSignCount(db, cred.credential_id, newCount);
+  q.updateSignCount(db, cred.credential_id, verification.authenticationInfo.newCounter);
 
   return {
     client_data_json: Buffer.from(response.response.clientDataJSON, "base64url").toString("utf8"),

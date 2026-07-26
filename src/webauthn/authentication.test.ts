@@ -2,12 +2,51 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb } from "../db/index.js";
 import * as q from "../db/queries.js";
-import { beginApproval, challengeFor } from "./authentication.js";
+import { beginApproval, challengeFor, finishApproval } from "./authentication.js";
 import { hashCanonical } from "../crypto/canonical.js";
+import { RP } from "./config.js";
 import type { Database } from "better-sqlite3";
+import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 
 let db: Database;
 const hash = hashCanonical('{"amount":2500000}');
+
+/**
+ * A syntactically valid (unsigned) authenticator-data buffer: 32-byte rpIdHash
+ * (arbitrary — never inspected before either test path below throws) + 1-byte
+ * flags (user-present) + 4-byte big-endian counter. No attested credential
+ * data or extensions, so this is exactly 37 bytes.
+ */
+function authenticatorData(counter: number): string {
+  const buf = Buffer.alloc(37);
+  buf[32] = 0x01;
+  buf.writeUInt32BE(counter, 33);
+  return buf.toString("base64url");
+}
+
+function clientDataJSON(challenge: string): string {
+  return Buffer.from(JSON.stringify({ type: "webauthn.get", challenge, origin: RP.origin })).toString("base64url");
+}
+
+/**
+ * A hand-crafted assertion response. Both branches under test here throw
+ * inside verifyAuthenticationResponse (or before it's even called) ahead of
+ * signature verification, so no real passkey signature is needed — see the
+ * step order in the library's own verifyAuthenticationResponse.js.
+ */
+function assertion(counter: number, challenge: string): AuthenticationResponseJSON {
+  return {
+    id: "YWJj",
+    rawId: "YWJj",
+    type: "public-key",
+    clientExtensionResults: {},
+    response: {
+      clientDataJSON: clientDataJSON(challenge),
+      authenticatorData: authenticatorData(counter),
+      signature: Buffer.from("sig").toString("base64url"),
+    },
+  };
+}
 
 beforeEach(() => {
   db = openDb(":memory:");
@@ -71,5 +110,30 @@ describe("beginApproval", () => {
 
   it("rejects a malformed action hash", async () => {
     await expect(beginApproval(db, "prin_1", "sha256:nope", "approve")).rejects.toThrow(/malformed hash/);
+  });
+});
+
+describe("finishApproval", () => {
+  it("reports a counter regression as possible_credential_clone, not binding_mismatch", async () => {
+    q.updateSignCount(db, "YWJj", 5);
+    const response = assertion(3, challengeFor(hash, "approve"));
+
+    await expect(finishApproval(db, "prin_1", hash, "approve", response))
+      .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
+
+    const events = db.prepare(`SELECT event FROM audit_log`).all() as Array<{ event: string }>;
+    expect(events.map((e) => e.event)).toEqual(["possible_credential_clone"]);
+  });
+
+  it("still reports a genuine challenge mismatch as binding_mismatch", async () => {
+    // Counter is fine (no regression); the crafted clientDataJSON carries the
+    // wrong challenge, so this must fail the binding check instead.
+    const response = assertion(1, "not-the-real-challenge");
+
+    await expect(finishApproval(db, "prin_1", hash, "approve", response))
+      .rejects.toMatchObject({ code: "binding_mismatch", httpStatus: 400 });
+
+    const events = db.prepare(`SELECT event FROM audit_log`).all() as Array<{ event: string }>;
+    expect(events.map((e) => e.event)).toEqual(["binding_mismatch"]);
   });
 });
