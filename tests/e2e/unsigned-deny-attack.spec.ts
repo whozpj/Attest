@@ -25,8 +25,15 @@ test("a bare, unsigned deny request cannot resolve a pending attestation", async
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ principal_id: "prin_someone_else", decision: "deny" }),
   });
+  const decision = await decisionRes.json();
 
-  expect(decisionRes.ok).toBe(false);
+  // Asserting only "not ok" would also be satisfied by an unhandled crash --
+  // that was exactly the bug's first incarnation (a raw 500, no audit row).
+  // The typed code is the part worth pinning down at this layer; the audit
+  // row itself is checked at the integration layer, where the db is
+  // reachable in-process (see tests/integration/pipeline.test.ts).
+  expect(decisionRes.status).toBe(400);
+  expect(decision.error).toBe("signature_required");
 
   const att = await fetch(`${BASE}/v1/attestations/${created.attestation_id}`).then((r) => r.json());
   expect(att.status).toBe("pending");

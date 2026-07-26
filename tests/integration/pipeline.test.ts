@@ -97,4 +97,43 @@ describe("http surface", () => {
     const res = await app.inject({ method: "GET", url: "/.well-known/jwks.json" });
     expect(res.json().keys[0]).not.toHaveProperty("d");
   });
+
+  // The unsigned-deny DoS gap (closed in f163865/5f21575) has a companion
+  // e2e test (tests/e2e/unsigned-deny-attack.spec.ts) that checks the typed
+  // error code over HTTP. It can't check the audit row -- that test runs
+  // against a separate server process reachable only by fetch. This is the
+  // in-process half: only here is app.ctx.db reachable directly, which is
+  // exactly what the Global Constraint ("every rejection writes an
+  // audit_log row") requires evidence of. A test that only checks the HTTP
+  // response status would pass identically whether or not the audit write
+  // actually happened.
+  it("rejects a bare, unsigned deny with a typed error and an audit_log row", async () => {
+    const principal = await app.inject({
+      method: "POST", url: "/v1/principals",
+      payload: { email: "deny-dos@test.local", display_name: "D" },
+    });
+    const principalId = principal.json().principal_id;
+
+    const created = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: { requested_by: "int", approver_ids: [principalId], action: wire },
+    });
+    const attestationId = created.json().attestation_id;
+
+    const decisionRes = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestationId}/decision`,
+      payload: { principal_id: principalId, decision: "deny" },
+    });
+
+    expect(decisionRes.statusCode).toBe(400);
+    expect(decisionRes.json().error).toBe("signature_required");
+
+    const rows = app.ctx.db.prepare(
+      `SELECT * FROM audit_log WHERE attestation_id = ? AND event = 'signature_required'`,
+    ).all(attestationId);
+    expect(rows.length).toBeGreaterThan(0);
+
+    const att = await app.inject({ method: "GET", url: `/v1/attestations/${attestationId}` });
+    expect(att.json().status).toBe("pending");
+  });
 });
