@@ -75,4 +75,32 @@ describe("approvals", () => {
     const rows = db.prepare("SELECT * FROM audit_log").all();
     expect(rows).toHaveLength(1);
   });
+
+  it("returns approvals in the order they were signed, not row/index order", () => {
+    // Without an ORDER BY, SQLite is free to return rows via whichever index
+    // it picks — here that's the UNIQUE(attestation_id, principal_id) index,
+    // which sorts by principal_id. principal_id has nothing to do with who
+    // approved first, so a caller relying on array order (state.ts takes
+    // approvers[0] as the token's `sub`) would silently get the wrong human
+    // whenever approval order and principal_id order disagree.
+    q.insertPrincipal(db, { id: "prin_2", email: "z@b.test", display_name: "Z" });
+
+    // "prin_2" sorts before "prin_1"... no it doesn't; pick ids that make the
+    // point unambiguous: zoe approves first even though her id is
+    // lexicographically *after* alice's.
+    const earlier = new Date(Date.now() - 10_000).toISOString();
+    const later = new Date().toISOString();
+
+    db.prepare(
+      `INSERT INTO attestation_approvals (id, attestation_id, principal_id, decision, client_data_json, signed_at)
+       VALUES (?, ?, ?, 'approve', '{}', ?)`,
+    ).run("ap_later", "att_1", "prin_1", later);
+    db.prepare(
+      `INSERT INTO attestation_approvals (id, attestation_id, principal_id, decision, client_data_json, signed_at)
+       VALUES (?, ?, ?, 'approve', '{}', ?)`,
+    ).run("ap_earlier", "att_1", "prin_2", earlier);
+
+    const approvals = q.getApprovals(db, "att_1");
+    expect(approvals.map((a) => a.principal_id)).toEqual(["prin_2", "prin_1"]);
+  });
 });

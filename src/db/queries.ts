@@ -101,9 +101,30 @@ export function insertApproval(
   ).run(a.id, a.attestation_id, a.principal_id, a.decision, a.client_data_json, now());
 }
 
+/**
+ * Ordered chronologically — who actually approved/denied first. Without an
+ * explicit ORDER BY, SQLite is free to satisfy `WHERE attestation_id = ?` via
+ * the UNIQUE(attestation_id, principal_id) index, which returns rows sorted
+ * by `principal_id` — a column with no relationship to approval order at
+ * all. `state.ts` takes `approvers[0]` as the issued token's `sub` ("primary
+ * approver" per the AttestationToken contract), so that ordering bug meant
+ * the token could name whichever principal happened to sort first
+ * alphabetically, not whoever actually approved first.
+ *
+ * Ordering by `signed_at` alone is not enough: it's an ISO string with only
+ * millisecond resolution, and two approvals submitted in quick succession
+ * (the common case — a fast test, or two people clicking within the same
+ * millisecond) can tie. `id` is `ap_${randomUUID()}` and is NOT a valid
+ * tiebreak — it has no relationship to insertion order either, so a tie on
+ * `signed_at` would silently reintroduce the exact bug this fixes. The
+ * table has no `WITHOUT ROWID` clause, so SQLite gives it an implicit,
+ * monotonically-increasing `rowid` reflecting true insertion order; that is
+ * the correct tiebreak, and arguably the correct primary sort on its own.
+ */
 export function getApprovals(db: Database, attestationId: string) {
-  return db.prepare(`SELECT * FROM attestation_approvals WHERE attestation_id = ?`)
-    .all(attestationId) as Array<{ principal_id: string; decision: Decision; signed_at: string }>;
+  return db.prepare(
+    `SELECT * FROM attestation_approvals WHERE attestation_id = ? ORDER BY signed_at, rowid`,
+  ).all(attestationId) as Array<{ principal_id: string; decision: Decision; signed_at: string }>;
 }
 
 export function setAttestationResolved(

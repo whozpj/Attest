@@ -75,6 +75,18 @@ describe("multi-party quorum", () => {
     expect(claims.approvers.sort()).toEqual(["prin_1", "prin_2"]);
     expect(claims.mth).toBe("passkey_multi");
   });
+
+  it("names whoever approved FIRST as `sub`, not whoever sorts first alphabetically", async () => {
+    // prin_zoe approves before prin_alice — alphabetically the reverse of
+    // approval order. `sub` is documented as "primary approver"; the only
+    // reading of that consistent with the audit trail is "first to approve",
+    // so it must be prin_zoe here, never prin_alice.
+    await seed(2, ["prin_alice", "prin_zoe"]);
+    await recordDecision(db, kp, "att_1", "prin_zoe", "approve", "{}");
+    const r = await recordDecision(db, kp, "att_1", "prin_alice", "approve", "{}");
+    const claims = JSON.parse(Buffer.from(r.token!.split(".")[1], "base64url").toString());
+    expect(claims.sub).toBe("prin_zoe");
+  });
 });
 
 describe("rejections", () => {
