@@ -330,6 +330,32 @@ describe("principal_id is validated at the boundary, not assumed present", () =>
   });
 });
 
+describe("POST /v1/attestations/:id/options on an expired attestation (F5)", () => {
+  it("rejects with 410 instead of handing out a live challenge and real allowCredentials", async () => {
+    const principal_id = await createPrincipalWithCredential("opt-expired@test.local");
+    const created = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: {
+        requested_by: "int", approver_ids: [principal_id], action: wire, ttl_seconds: -1,
+      },
+    });
+    const { attestation_id } = created.json();
+
+    // Left alone (never read) so it expires silently -- this /options call
+    // must be the one to observe and reject it, same as GET and /decision
+    // already do via effectiveStatus.
+    const res = await app.inject({
+      method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+      payload: { principal_id, decision: "approve" },
+    });
+
+    expect(res.statusCode).toBe(410);
+    expect(res.json().error).toBe("expired");
+    expect(res.json()).not.toHaveProperty("challenge");
+    expect(res.json()).not.toHaveProperty("allowCredentials");
+  });
+});
+
 describe("GET /v1/attestations/:id on an expired attestation", () => {
   it("does not leak the summary from the very read that expires it", async () => {
     const principal = await app.inject({

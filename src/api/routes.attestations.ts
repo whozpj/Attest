@@ -116,6 +116,18 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     // unusable as a replayed approval and vice versa.
     assertDecision(body.decision);
     assertPrincipalId(body.principal_id);
+    // Every other read path in this file (GET, /decision) checks
+    // effectiveStatus before doing anything else — this is the one that
+    // didn't, so an already-expired attestation could still hand out a live
+    // challenge and the approver's real credential IDs. /decision still
+    // rejects it afterward (410), so there's no live authorization
+    // consequence, but it contradicts design §8 ("expiry is evaluated on
+    // read") and skips the payload-purge side effect that read is supposed
+    // to trigger.
+    const status = effectiveStatus(db, id);
+    if (status === "expired") {
+      throw new FailClosedError("expired", 410, "attestation has expired");
+    }
     const att = q.getAttestation(db, id);
     if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
 
