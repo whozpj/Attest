@@ -7,6 +7,7 @@ import { openDb } from "../db/index.js";
 import * as q from "../db/queries.js";
 import { loadOrCreateKeypair, type Keypair } from "../crypto/tokens.js";
 import { effectiveStatus, recordDecision } from "./state.js";
+import { FailClosedError } from "../types.js";
 import type { Database } from "better-sqlite3";
 
 let db: Database;
@@ -102,6 +103,31 @@ describe("rejections", () => {
     await recordDecision(db, kp, "att_1", "prin_1", "approve", "{}");
     await expect(recordDecision(db, kp, "att_1", "prin_1", "approve", "{}"))
       .rejects.toThrow(/already resolved/);
+  });
+
+  it("refuses a second decision from a principal who already decided, while the attestation is still pending", async () => {
+    // required=2 keeps the attestation "pending" after prin_1's first
+    // decision, so a second call from prin_1 reaches insertApproval instead
+    // of being short-circuited by the "already resolved" branch above. Before
+    // the fix, this hit the DB's raw UNIQUE(attestation_id, principal_id)
+    // constraint directly and threw an untyped SqliteError.
+    await seed(2, ["prin_1", "prin_2"]);
+    const first = await recordDecision(db, kp, "att_1", "prin_1", "approve", "{}");
+    expect(first.status).toBe("pending");
+
+    let caught;
+    try {
+      await recordDecision(db, kp, "att_1", "prin_1", "approve", "{}");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FailClosedError);
+    expect((caught as FailClosedError).code).toBe("already_decided");
+    expect((caught as FailClosedError).httpStatus).toBe(409);
+
+    // The rejected second attempt must not have touched quorum state at all.
+    expect(q.getApprovals(db, "att_1")).toHaveLength(1);
+    expect(q.getAttestation(db, "att_1")!.status).toBe("pending");
   });
 
   it("refuses a decision after expiry and reports expired", async () => {

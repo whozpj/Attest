@@ -3,7 +3,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { buildServer } from "./server.js";
+import { makeFakeCredential, signAssertion } from "../../tests/security/lib/webauthn-fake.js";
 
 let app: Awaited<ReturnType<typeof buildServer>>;
 
@@ -172,6 +174,71 @@ describe("POST /v1/attestations/:id/decision requires a real signature for deny 
     // block a pending attestation.
     const check = await app.inject({ method: "GET", url: `/v1/attestations/${attestation_id}` });
     expect(check.json().status).toBe("pending");
+  });
+});
+
+async function createPrincipalWithRealCredential(email: string) {
+  const res = await app.inject({
+    method: "POST", url: "/v1/principals",
+    payload: { email, display_name: email },
+  });
+  const { principal_id } = res.json();
+  const cred = makeFakeCredential();
+  app.ctx.db.prepare(
+    `INSERT INTO credentials (id, principal_id, credential_id, public_key, sign_count, transports, created_at)
+     VALUES (?, ?, ?, ?, 0, NULL, ?)`,
+  ).run(`cred_${randomUUID()}`, principal_id, cred.credentialId, cred.publicKeyCose, new Date().toISOString());
+  return { principal_id: principal_id as string, cred };
+}
+
+describe("POST /v1/attestations/:id/decision refuses a second decision from a principal who already decided (F4)", () => {
+  it("first decision succeeds, a second genuinely-signed decision from the same principal is a typed 409, and quorum state is unaffected", async () => {
+    // required_approvals: 2 keeps the attestation pending after the first
+    // decision, so the second call reaches recordDecision's insertApproval
+    // path instead of being turned away earlier by "already resolved" — this
+    // is the case the original DB-level UNIQUE constraint crash actually hit
+    // (see F4): an ordinary replayed assertion on a counter-0 authenticator.
+    const first = await createPrincipalWithRealCredential("dup-decide-1@test.local");
+    const second = await createPrincipalWithRealCredential("dup-decide-2@test.local");
+
+    const createRes = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: {
+        requested_by: "int", approver_ids: [first.principal_id, second.principal_id],
+        required_approvals: 2, action: wire,
+      },
+    });
+    const { attestation_id } = createRes.json();
+
+    async function decide(cred: typeof first.cred, principalId: string, signCount: number) {
+      const opts = await app.inject({
+        method: "POST", url: `/v1/attestations/${attestation_id}/options`,
+        payload: { principal_id: principalId, decision: "approve" },
+      });
+      const response = signAssertion(cred, opts.json().challenge, signCount);
+      return app.inject({
+        method: "POST", url: `/v1/attestations/${attestation_id}/decision`,
+        payload: { principal_id: principalId, decision: "approve", response },
+      });
+    }
+
+    const firstDecision = await decide(first.cred, first.principal_id, 1);
+    expect(firstDecision.statusCode).toBe(200);
+    expect(firstDecision.json().status).toBe("pending"); // quorum not yet met
+
+    // A second, genuinely-valid signature (freshly signed, higher counter —
+    // not a byte-for-byte replay) from the SAME principal who already decided.
+    const secondDecision = await decide(first.cred, first.principal_id, 2);
+    expect(secondDecision.statusCode).toBe(409);
+    expect(secondDecision.json().error).toBe("already_decided");
+
+    // The rejected duplicate must not have moved quorum state at all.
+    const check = await app.inject({ method: "GET", url: `/v1/attestations/${attestation_id}` });
+    expect(check.json().status).toBe("pending");
+    expect(check.json().approvals).toBe(1);
+
+    expect(auditRows().some((r) => r.event === "already_decided" && r.attestation_id === attestation_id))
+      .toBe(true);
   });
 });
 

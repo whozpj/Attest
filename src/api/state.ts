@@ -53,6 +53,23 @@ export async function recordDecision(
     throw new FailClosedError("not_an_approver", 403, "principal is not an approver for this attestation");
   }
 
+  // Security control, not just tidiness: without this check, a principal who
+  // already decided could submit a second, genuinely-valid signed decision
+  // and hit the DB's raw UNIQUE(attestation_id, principal_id) constraint
+  // instead of a typed rejection. That matters beyond the crash itself — an
+  // ordinary replayed assertion (no forgery required) is reachable on any
+  // authenticator whose sign_count stays at 0 across both submissions
+  // (iCloud Keychain and most platform passkeys never advance the counter
+  // when it's already 0 on both sides, so finishApproval's counter-regression
+  // check never fires). Left unguarded, that's assertion-replay-based quorum
+  // inflation: the same one real signature counted twice toward
+  // required_approvals. Distinct from `already_resolved` above — that's the
+  // whole attestation being terminal; this is one principal, on an
+  // attestation still pending, having already cast their one decision.
+  if (q.getApprovals(db, attestationId).some((a) => a.principal_id === principalId)) {
+    throw new FailClosedError("already_decided", 409, "principal has already recorded a decision for this attestation");
+  }
+
   q.insertApproval(db, {
     id: `ap_${randomUUID()}`,
     attestation_id: attestationId,
