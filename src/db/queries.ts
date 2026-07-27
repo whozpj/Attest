@@ -134,6 +134,39 @@ export function setAttestationResolved(
     .run(status, now(), token, id);
 }
 
+export function insertEnrolmentToken(
+  db: Database, t: { token: string; principal_id: string; expires_at: string },
+): void {
+  db.prepare(
+    `INSERT INTO enrolment_tokens (token, principal_id, expires_at, used_at, created_at)
+     VALUES (?, ?, ?, NULL, ?)`,
+  ).run(t.token, t.principal_id, t.expires_at, now());
+}
+
+export function getEnrolmentToken(db: Database, token: string) {
+  return db.prepare(`SELECT * FROM enrolment_tokens WHERE token = ?`).get(token) as
+    | { token: string; principal_id: string; expires_at: string; used_at: string | null }
+    | undefined;
+}
+
+/**
+ * Atomically checks and burns a single-use enrolment token in one statement,
+ * so two concurrent requests racing on the same token cannot both observe it
+ * as "still valid" before either commits a consumption — the same
+ * check-then-mutate race already closed for approval quorum in
+ * state.ts/recordDecision. Returns whether *this* call is the one that
+ * consumed it; a token that's missing, bound to a different principal,
+ * expired, or already used all resolve to `false` the same way, by design —
+ * the caller collapses all of them into one opaque rejection.
+ */
+export function consumeEnrolmentToken(db: Database, token: string, principalId: string): boolean {
+  const result = db.prepare(
+    `UPDATE enrolment_tokens SET used_at = ?
+     WHERE token = ? AND principal_id = ? AND used_at IS NULL AND expires_at > ?`,
+  ).run(now(), token, principalId, now());
+  return result.changes === 1;
+}
+
 export function audit(
   db: Database,
   e: { attestation_id: string | null; event: string; actor: string | null; detail: string | null },

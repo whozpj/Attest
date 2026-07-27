@@ -34,6 +34,59 @@ describe("principals and credentials", () => {
   });
 });
 
+describe("enrolment tokens", () => {
+  beforeEach(() => {
+    q.insertPrincipal(db, { id: "prin_1", email: "a@b.test", display_name: "A" });
+  });
+
+  it("round-trips a fresh token", () => {
+    q.insertEnrolmentToken(db, {
+      token: "tok_1", principal_id: "prin_1",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const row = q.getEnrolmentToken(db, "tok_1");
+    expect(row?.principal_id).toBe("prin_1");
+    expect(row?.used_at).toBeNull();
+  });
+
+  it("returns undefined for a token that was never issued", () => {
+    expect(q.getEnrolmentToken(db, "tok_ghost")).toBeUndefined();
+  });
+
+  it("consumeEnrolmentToken succeeds exactly once for a fresh, matching, unexpired token", () => {
+    q.insertEnrolmentToken(db, {
+      token: "tok_2", principal_id: "prin_1",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(q.consumeEnrolmentToken(db, "tok_2", "prin_1")).toBe(true);
+    // Single-use: a second attempt, even with the exact same valid inputs, fails.
+    expect(q.consumeEnrolmentToken(db, "tok_2", "prin_1")).toBe(false);
+  });
+
+  it("consumeEnrolmentToken fails for a token bound to a different principal", () => {
+    q.insertPrincipal(db, { id: "prin_2", email: "z@b.test", display_name: "Z" });
+    q.insertEnrolmentToken(db, {
+      token: "tok_3", principal_id: "prin_1",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(q.consumeEnrolmentToken(db, "tok_3", "prin_2")).toBe(false);
+    // And it's still unused — a mismatched-principal attempt must not burn it.
+    expect(q.getEnrolmentToken(db, "tok_3")?.used_at).toBeNull();
+  });
+
+  it("consumeEnrolmentToken fails for an expired token", () => {
+    q.insertEnrolmentToken(db, {
+      token: "tok_4", principal_id: "prin_1",
+      expires_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    expect(q.consumeEnrolmentToken(db, "tok_4", "prin_1")).toBe(false);
+  });
+
+  it("consumeEnrolmentToken fails for an unknown token", () => {
+    expect(q.consumeEnrolmentToken(db, "tok_never_issued", "prin_1")).toBe(false);
+  });
+});
+
 describe("actions", () => {
   it("purges the payload but retains the hash", () => {
     q.insertAction(db, {

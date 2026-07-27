@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS attestation_approvals (
   UNIQUE (attestation_id, principal_id)
 );
 
+CREATE TABLE IF NOT EXISTS enrolment_tokens (
+  token TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(id),
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attestation_id TEXT,
