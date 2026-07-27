@@ -287,7 +287,7 @@ Fail closed, and say why without leaking. Every rejection writes to `audit_log`.
 |---|---|
 | Payload fails type schema | `400`, before hashing |
 | Unknown principal or credential | `404` / `401`, no distinction leaked to caller |
-| Challenge ≠ expected `payload_hash` | `400`, logged as `binding_mismatch` — high-signal event |
+| Challenge ≠ expected `hash({act, att, decision})` | `400`, logged as `binding_mismatch` — high-signal event |
 | Signature invalid | `401`, logged |
 | `sign_count` regression | `401`, logged as `possible_credential_clone` |
 | Approval after terminal state | `409` |
