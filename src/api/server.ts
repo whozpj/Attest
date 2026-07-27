@@ -6,7 +6,7 @@ import { openDb, type Database } from "../db/index.js";
 import { loadOrCreateKeypair, type Keypair } from "../crypto/tokens.js";
 import * as q from "../db/queries.js";
 import { FailClosedError } from "../types.js";
-import { auditDetailOf } from "./audit-detail.js";
+import { auditDetailOf, auditEventOf } from "./audit-detail.js";
 import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";
@@ -76,11 +76,17 @@ export async function buildServer(
     // body" vs "duplicate email" behind the same opaque anti-enumeration
     // response — without that distinction ever reaching the caller.
     const auditDetail = isFailClosed ? auditDetailOf(err) : undefined;
+    // A throw site can similarly override the event name (`withAuditEvent`)
+    // when its own signal is more specific than its HTTP error code — e.g.
+    // possible_credential_clone is a materially different alarm than the
+    // generic counter_regression code alone would convey — so that richer
+    // name is the one row this rejection writes, not a second row alongside it.
+    const auditEvent = isFailClosed ? auditEventOf(err) : undefined;
     const message = err instanceof Error ? err.message : String(err);
 
     q.audit(app.ctx.db, {
       attestation_id: attestationId,
-      event: isFailClosed ? err.code : "internal_error",
+      event: auditEvent ?? (isFailClosed ? err.code : "internal_error"),
       actor,
       detail: auditDetail ?? message,
     });

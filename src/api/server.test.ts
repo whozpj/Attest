@@ -4,6 +4,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./server.js";
+import { withAuditEvent, withAuditDetail } from "./audit-detail.js";
+import { FailClosedError } from "../types.js";
 
 let app: Awaited<ReturnType<typeof buildServer>>;
 
@@ -96,5 +98,27 @@ describe("every rejection writes an audit_log row, via the central error handler
     expect(res.statusCode).toBe(500);
     expect(res.json()).toEqual({ error: "internal_error" });
     expect(auditRows().some((r) => r.event === "internal_error" && r.detail === "kaboom")).toBe(true);
+  });
+
+  it("lets a throw site override the audit event name via withAuditEvent, writing exactly one row under that name", async () => {
+    app.get("/__test/richer-signal", async () => {
+      throw withAuditEvent(
+        withAuditDetail(
+          new FailClosedError("counter_regression", 401, "authenticator counter regressed"),
+          "stored=3 presented=1",
+        ),
+        "possible_credential_clone",
+      );
+    });
+
+    const res = await app.inject({ method: "GET", url: "/__test/richer-signal" });
+    expect(res.statusCode).toBe(401);
+    // The HTTP response is unaffected by either override.
+    expect(res.json()).toEqual({ error: "counter_regression", message: "authenticator counter regressed" });
+
+    const rows = auditRows();
+    expect(rows.filter((r) => r.event === "counter_regression")).toHaveLength(0);
+    expect(rows.filter((r) => r.event === "possible_credential_clone")).toHaveLength(1);
+    expect(rows.find((r) => r.event === "possible_credential_clone")?.detail).toBe("stored=3 presented=1");
   });
 });
