@@ -122,3 +122,40 @@ describe("every rejection writes an audit_log row, via the central error handler
     expect(rows.find((r) => r.event === "possible_credential_clone")?.detail).toBe("stored=3 presented=1");
   });
 });
+
+describe("a POST with no request body at all never reaches a handler as bare `undefined`", () => {
+  // Every route handler casts `req.body as {...}` and reads fields off it
+  // (`body.email`, `body.decision`, ...). When no body is sent at all (no
+  // Content-Type, nothing on the wire), Fastify leaves `req.body` as the bare
+  // JS value `undefined` rather than an empty object — so `body.email` etc.
+  // throws a raw TypeError reading a property of `undefined`, before any
+  // route's own "is this field present and well-typed" check ever runs. That
+  // escaped as an unaudited, untyped 500 on every route that didn't happen to
+  // guard against it by accident. Normalizing a missing body to `{}` in one
+  // place (rather than re-guarding every call site) means every route's
+  // already-correct "field X is required" validation runs the same way it
+  // does for an explicit `{}` body.
+  it("POST /v1/principals with no body: same typed rejection as an explicit empty body", async () => {
+    const explicit = await app.inject({ method: "POST", url: "/v1/principals", payload: {} });
+    const noBody = await app.inject({ method: "POST", url: "/v1/principals" });
+    expect(noBody.statusCode).toBe(explicit.statusCode);
+    expect(noBody.json()).toEqual(explicit.json());
+    expect(noBody.statusCode).not.toBe(500);
+  });
+
+  it("POST /v1/attestations/:id/options with no body: same typed rejection as an explicit empty body", async () => {
+    const explicit = await app.inject({ method: "POST", url: "/v1/attestations/att_ghost/options", payload: {} });
+    const noBody = await app.inject({ method: "POST", url: "/v1/attestations/att_ghost/options" });
+    expect(noBody.statusCode).toBe(explicit.statusCode);
+    expect(noBody.json()).toEqual(explicit.json());
+    expect(noBody.statusCode).not.toBe(500);
+  });
+
+  it("POST /v1/attestations/:id/decision with no body: same typed rejection as an explicit empty body", async () => {
+    const explicit = await app.inject({ method: "POST", url: "/v1/attestations/att_ghost/decision", payload: {} });
+    const noBody = await app.inject({ method: "POST", url: "/v1/attestations/att_ghost/decision" });
+    expect(noBody.statusCode).toBe(explicit.statusCode);
+    expect(noBody.json()).toEqual(explicit.json());
+    expect(noBody.statusCode).not.toBe(500);
+  });
+});

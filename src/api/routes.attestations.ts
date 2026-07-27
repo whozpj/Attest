@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppContext } from "./server.js";
 import * as q from "../db/queries.js";
 import { prepareAction, renderSummary } from "../actions/render.js";
+import { validateEnvelope } from "../actions/schemas.js";
 import { beginApproval, finishApproval } from "../webauthn/authentication.js";
 import { effectiveStatus, recordDecision } from "./state.js";
 import { FailClosedError, type Decision } from "../types.js";
@@ -49,25 +50,28 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
   const { db } = app.ctx;
 
   app.post("/v1/attestations", async (req, reply) => {
-    const body = req.body as {
-      action: unknown; approver_ids: string[];
-      required_approvals?: number; requested_by: string; ttl_seconds?: number;
-    };
+    // Validated with the same closed-world rigor validateAction applies to
+    // the nested action payload — see schemas.ts's validateEnvelope for why
+    // each of these checks exists (an unvalidated approver_ids, in
+    // particular, can turn state.ts's set-membership check into a substring
+    // match once it round-trips through JSON.stringify/JSON.parse as a
+    // non-array).
+    const envelope = validateEnvelope(req.body);
 
-    const action = prepareAction(body.action);
+    const action = prepareAction(envelope.action);
     const actionId = `act_${randomUUID()}`;
     q.insertAction(db, {
-      id: actionId, requested_by: body.requested_by, type: action.type,
+      id: actionId, requested_by: envelope.requested_by, type: action.type,
       canonical_json: action.canonical_json, payload_hash: action.payload_hash,
-      risk_tier: (body.action as { risk_tier: string }).risk_tier,
+      risk_tier: (envelope.action as { risk_tier: string }).risk_tier,
     });
 
     const attestationId = `att_${randomUUID()}`;
     q.insertAttestation(db, {
       id: attestationId, action_id: actionId,
-      required_approvals: body.required_approvals ?? 1,
-      approver_ids: body.approver_ids,
-      expires_at: new Date(Date.now() + (body.ttl_seconds ?? 900) * 1000).toISOString(),
+      required_approvals: envelope.required_approvals,
+      approver_ids: envelope.approver_ids,
+      expires_at: new Date(Date.now() + envelope.ttl_seconds * 1000).toISOString(),
     });
 
     return reply.status(201).send({

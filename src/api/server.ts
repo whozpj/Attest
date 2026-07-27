@@ -45,6 +45,24 @@ export async function buildServer(
     reply.sendFile("index.umd.min.js", join(here, "../../node_modules/@simplewebauthn/browser/dist/bundle")),
   );
 
+  // A request with no body at all (no Content-Type, nothing on the wire)
+  // leaves Fastify's req.body as the bare JS value `undefined` — not `{}`.
+  // Every route handler does `req.body as {...}` and reads fields straight
+  // off it, so an absent body throws a raw TypeError (reading a property of
+  // undefined) before that route's own "is this field present" validation
+  // ever runs, escaping as an unaudited 500. This is the one place that
+  // normalizes it, so every route's existing field-level validation sees the
+  // same shape it already handles correctly for an explicit `{}` body,
+  // rather than each route re-guarding against `undefined` individually —
+  // the same defect, at a different call site, recurring across
+  // routes.principals.ts, routes.attestations.ts, and routes.verify.ts.
+  app.addHook("preValidation", (req, _reply, done) => {
+    if (req.body === undefined || req.body === null) {
+      req.body = {};
+    }
+    done();
+  });
+
   // Centralized audit logging: this is the one place every rejection in the
   // app passes through, regardless of which route or module threw it. That
   // makes it the right choke point for "every rejection writes an
