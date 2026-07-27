@@ -46,9 +46,9 @@ test("a bare, unsigned deny request cannot resolve a pending attestation", async
 // the challenge, not just the action, is for.
 test("a genuine approve signature cannot be replayed as a deny on the same action", async ({ page }) => {
   await withVirtualAuthenticator(page);
-  const principalId = await createPrincipal(BASE, `e2e-decision-swap-${Date.now()}@test.local`);
+  const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-decision-swap-${Date.now()}@test.local`);
 
-  await page.goto("/approve/enrol.html?principal=" + principalId);
+  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
   await page.click("#enrol");
   await expect(page.locator("#status")).toContainText("enrolled");
 

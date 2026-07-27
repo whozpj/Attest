@@ -29,11 +29,13 @@ test("quorum genuinely requires two real approvers before a token issues", async
   const page2 = await context.newPage();
   await withVirtualAuthenticator(page2);
 
-  const principal1 = await createPrincipal(BASE, `e2e-quorum-1-${Date.now()}@test.local`);
-  const principal2 = await createPrincipal(BASE, `e2e-quorum-2-${Date.now()}@test.local`);
+  const { principalId: principal1, enrolmentToken: token1 } =
+    await createPrincipal(BASE, `e2e-quorum-1-${Date.now()}@test.local`);
+  const { principalId: principal2, enrolmentToken: token2 } =
+    await createPrincipal(BASE, `e2e-quorum-2-${Date.now()}@test.local`);
 
-  await enrolPasskey(page, principal1);
-  await enrolPasskey(page2, principal2);
+  await enrolPasskey(page, principal1, token1);
+  await enrolPasskey(page2, principal2, token2);
 
   const created = await fetch(`${BASE}/v1/attestations`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -91,11 +93,13 @@ test("one real denial beats any number of real approvals", async ({ page, contex
   const page2 = await context.newPage();
   await withVirtualAuthenticator(page2);
 
-  const principal1 = await createPrincipal(BASE, `e2e-failclosed-1-${Date.now()}@test.local`);
-  const principal2 = await createPrincipal(BASE, `e2e-failclosed-2-${Date.now()}@test.local`);
+  const { principalId: principal1, enrolmentToken: token1 } =
+    await createPrincipal(BASE, `e2e-failclosed-1-${Date.now()}@test.local`);
+  const { principalId: principal2, enrolmentToken: token2 } =
+    await createPrincipal(BASE, `e2e-failclosed-2-${Date.now()}@test.local`);
 
-  await enrolPasskey(page, principal1);
-  await enrolPasskey(page2, principal2);
+  await enrolPasskey(page, principal1, token1);
+  await enrolPasskey(page2, principal2, token2);
 
   const created = await fetch(`${BASE}/v1/attestations`, {
     method: "POST", headers: { "content-type": "application/json" },

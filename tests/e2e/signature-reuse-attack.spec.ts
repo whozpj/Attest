@@ -10,9 +10,9 @@ const BASE = "http://localhost:3000";
 // challenge binding alone must be enough to stop it.
 test("a genuine signature over a benign action cannot approve a different, malicious action", async ({ page }) => {
   await withVirtualAuthenticator(page);
-  const principalId = await createPrincipal(BASE, `e2e-mismatch-${Date.now()}@test.local`);
+  const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-mismatch-${Date.now()}@test.local`);
 
-  await page.goto("/approve/enrol.html?principal=" + principalId);
+  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
   await page.click("#enrol");
   await expect(page.locator("#status")).toContainText("enrolled");
 

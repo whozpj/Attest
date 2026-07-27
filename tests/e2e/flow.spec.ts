@@ -5,10 +5,10 @@ const BASE = "http://localhost:3000";
 
 test("a human approves an action and the token verifies against it", async ({ page }) => {
   await withVirtualAuthenticator(page);
-  const principalId = await createPrincipal(BASE, `e2e-${Date.now()}@test.local`);
+  const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-${Date.now()}@test.local`);
 
   // Enrol a passkey through the browser so the credential is real.
-  await page.goto("/approve/enrol.html?principal=" + principalId);
+  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
   await page.click("#enrol");
   await expect(page.locator("#status")).toContainText("enrolled");
 
@@ -43,9 +43,9 @@ test("a human approves an action and the token verifies against it", async ({ pa
 
 test("a denied action issues no token", async ({ page }) => {
   await withVirtualAuthenticator(page);
-  const principalId = await createPrincipal(BASE, `e2e-deny-${Date.now()}@test.local`);
+  const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-deny-${Date.now()}@test.local`);
 
-  await page.goto("/approve/enrol.html?principal=" + principalId);
+  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
   await page.click("#enrol");
   // Deny now requires a real signed assertion, same as approve, so the
   // credential must genuinely exist server-side before we drive the deny

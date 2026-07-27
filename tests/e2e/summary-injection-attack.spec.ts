@@ -16,7 +16,10 @@ const BASE = "http://localhost:3000";
 // threat-model row "agent shows the human one thing, executes another").
 // Pure markup and CSS are enough; a CSP would not stop this on its own.
 test("markup in a payload field renders as literal text, never as DOM", async ({ page }) => {
-  const principalId = await createPrincipal(BASE, `e2e-injection-${Date.now()}@test.local`);
+  // Never enrols a passkey -- this test only views the rendered page, so
+  // enrolment_token (needed by .../credentials endpoints, not this one) is
+  // unused here.
+  const { principalId } = await createPrincipal(BASE, `e2e-injection-${Date.now()}@test.local`);
 
   const maliciousRecipient = '<b id="injected">Netflix</b><script>window.__pwned = true</script>';
 
