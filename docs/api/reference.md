@@ -42,8 +42,17 @@ Registers a principal — the human who will later authorize actions.
 **Response** — `201 Created`
 
 ```json
-{ "principal_id": "prin_<uuid>" }
+{ "principal_id": "prin_<uuid>", "enrolment_token": "<base64url, single-use>" }
 ```
+
+`enrolment_token` is single-use and expires 15 minutes after issuance. It is
+the only thing that gates the two credential-enrolment endpoints below —
+`principal_id` alone proves nothing, since it is not secret: this same
+service embeds it in `approve_url`'s query string, so it is routinely handed
+around outside any trust boundary. Whoever delivers the enrolment link to
+the human (out of band — email, Slack, or similar; genuinely out of scope
+for this prototype, see [`docs/human-attest-mvp.md`](../human-attest-mvp.md)
+§4) needs to include this token in it, not just `principal_id`.
 
 **Status codes**
 
@@ -70,7 +79,12 @@ Begins passkey registration for principal `:id`. Returns WebAuthn
 `PublicKeyCredentialCreationOptions` (as JSON) to pass to
 `@simplewebauthn/browser`'s `startRegistration`.
 
-**Request body:** none.
+**Request:** no body. Query parameter `token` (required) — the
+`enrolment_token` from `POST /v1/principals`.
+
+```
+POST /v1/principals/prin_abc123/credentials/options?token=<enrolment_token>
+```
 
 **Response** — `200 OK`, a `PublicKeyCredentialCreationOptionsJSON` object,
 including a freshly generated `challenge` and, if the principal already has
@@ -82,7 +96,18 @@ be enrolled twice.
 | Status | Meaning |
 |---|---|
 | 200 | Options generated |
-| 404 | `unknown_principal` — no principal with this id |
+| 404 | `unknown_principal` — no principal with this id, **or** `token` is missing, malformed, bound to a different principal, expired, or already used |
+
+This call only *checks* the token — it does not consume it, since it's the
+"begin" half of a two-step ceremony and burning the token here would make it
+impossible to ever reach the "finish" step with it. All of the token-related
+rejections above return the exact same `unknown_principal`/`404` a
+nonexistent principal would, on purpose: a caller who knows a real
+`principal_id` but has a wrong token cannot tell that apart from the
+principal not existing at all, which is what keeps a stolen or guessed
+`principal_id` from being useful on its own. See
+[`docs/human-attest-mvp.md`](../human-attest-mvp.md) §4 for why this
+endpoint needed gating in the first place.
 
 The server holds the pending challenge in memory, keyed by principal id, until
 `POST /v1/principals/:id/credentials` completes it. Only one registration can
@@ -96,7 +121,12 @@ first's challenge.
 Completes passkey registration with the authenticator's response.
 
 **Request body:** the `RegistrationResponseJSON` produced by
-`startRegistration` in the browser.
+`startRegistration` in the browser. Query parameter `token` (required) — the
+same `enrolment_token`, presented again.
+
+```
+POST /v1/principals/prin_abc123/credentials?token=<enrolment_token>
+```
 
 **Response** — `201 Created`
 
@@ -109,8 +139,19 @@ Completes passkey registration with the authenticator's response.
 | Status | Meaning |
 |---|---|
 | 201 | Credential stored |
-| 400 | `no_pending_registration` — no options call preceded this one, or it already completed |
+| 400 | `no_pending_registration` — no options call preceded this one, it already completed, **or** `token` is missing, malformed, bound to a different principal, expired, or already used |
 | 400 | `registration_failed` — the authenticator response did not verify |
+
+This call *consumes* the token — atomically, so two concurrent requests
+racing on the same token cannot both succeed — which is what makes it
+single-use. As with `.../options`, a bad token collapses into the same
+response a caller would get without ever having called `.../options` at
+all; there is no way to distinguish "wrong token" from "no pending
+registration" from the HTTP response. Consumption happens before the
+WebAuthn ceremony is checked, so a failed ceremony (bad signature, etc.)
+still burns the token — a design partner retrying a failed enrolment needs
+to call `POST /v1/principals` again for a fresh one, not just retry
+`.../credentials`.
 
 ---
 

@@ -70,14 +70,21 @@ curl -s -X POST http://localhost:3000/v1/principals \
   -d '{"email":"demo@example.com","display_name":"Demo User"}'
 ```
 
-This returns `{ "principal_id": "prin_..." }`. Then, with a platform
-authenticator available (Touch ID, Windows Hello, or a security key), open:
+This returns `{ "principal_id": "prin_...", "enrolment_token": "..." }`. The
+token is single-use and expires in 15 minutes — it's what proves whoever
+opens the enrolment link next is the party this principal was created for,
+since `principal_id` alone is not secret (it ends up in `approve_url`'s query
+string). Then, with a platform authenticator available (Touch ID, Windows
+Hello, or a security key), open:
 
 ```
-http://localhost:3000/approve/enrol.html?principal=<principal_id>
+http://localhost:3000/approve/enrol.html?principal=<principal_id>&token=<enrolment_token>
 ```
 
-and click **Enrol passkey**. The page reports `enrolled` on success.
+and click **Enrol passkey**. The page reports `enrolled` on success. Without
+a valid token, or with one already used, the request fails the same way a
+request for a principal that doesn't exist would — see
+`docs/api/reference.md`.
 
 ## Run the demo agent
 

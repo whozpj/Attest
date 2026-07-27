@@ -14,13 +14,21 @@ terminal.
 ## 1. Create a principal
 
 ```bash
-PRINCIPAL_ID=$(curl -s -X POST http://localhost:3000/v1/principals \
+CREATED_PRINCIPAL=$(curl -s -X POST http://localhost:3000/v1/principals \
   -H 'content-type: application/json' \
-  -d '{"email":"partner@example.com","display_name":"Design Partner"}' \
-  | jq -r .principal_id)
+  -d '{"email":"partner@example.com","display_name":"Design Partner"}')
 
-echo "$PRINCIPAL_ID"
+echo "$CREATED_PRINCIPAL" | jq .
+
+PRINCIPAL_ID=$(echo "$CREATED_PRINCIPAL" | jq -r .principal_id)
+ENROLMENT_TOKEN=$(echo "$CREATED_PRINCIPAL" | jq -r .enrolment_token)
 ```
+
+Hold onto `ENROLMENT_TOKEN` alongside `PRINCIPAL_ID` — it's single-use and
+expires in 15 minutes, and it's what proves the next step is really being
+done by (or for) this principal rather than by anyone who merely learned the
+id. `principal_id` alone is not secret: it turns up in `approve_url`'s query
+string a few steps from now.
 
 ## 2. Enrol a passkey
 
@@ -29,11 +37,14 @@ needs a real (or virtual) authenticator. With a platform authenticator
 available (Touch ID, Windows Hello, or a security key), open:
 
 ```
-http://localhost:3000/approve/enrol.html?principal=<PRINCIPAL_ID>
+http://localhost:3000/approve/enrol.html?principal=<PRINCIPAL_ID>&token=<ENROLMENT_TOKEN>
 ```
 
-substituting the value printed above, and click **Enrol passkey**. The page
-reports `enrolled` on success.
+substituting both values printed above, and click **Enrol passkey**. The
+page reports `enrolled` on success. Missing the token, or reusing one that's
+already enrolled a credential, fails the same way an unknown principal
+would — there's no separate error to distinguish "wrong token" from
+"principal doesn't exist" (see `docs/api/reference.md`).
 
 ## 3. Create an attestation
 
