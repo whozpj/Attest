@@ -189,35 +189,62 @@ Enforced structurally:
    a per-type template. There is no code path where the caller influences it.
 5. The WebAuthn authentication ceremony's **challenge** is derived from
    `payload_hash`, not equal to it: the challenge is
-   `hash(canonicalize({ act: payload_hash, decision }))`, RFC 8785-canonicalized
-   and hashed the same way as an action payload, where `decision` is the
-   closed enum `"approve" | "deny"` being recorded. `payload_hash` is still the
-   dominant term — it is still what ties the signature to *this action* — but
-   folding `decision` into the same preimage means the hash lands inside
-   signed `clientDataJSON` for both approve and deny, not just approve.
+   `hash(canonicalize({ act: payload_hash, att: attestation_id, decision }))`,
+   RFC 8785-canonicalized and hashed the same way as an action payload, where
+   `decision` is the closed enum `"approve" | "deny"` being recorded and
+   `att` is the specific attestation instance the ceremony is for.
+   `payload_hash` is still the dominant term — it is still what ties the
+   signature to *this action* — but folding `att` and `decision` into the
+   same preimage means the hash lands inside signed `clientDataJSON` for
+   both approve and deny, and is unique to one attestation record even when
+   two records share an identical action.
 6. At **decision time** — for both `approve` and `deny`, not `approve` alone —
    the server recomputes the expected challenge from the stored
-   `canonical_json` and the decision being submitted, and compares it to the
-   challenge inside `clientDataJSON`. At **verify time** — after the payload
-   has been purged — the token's `act` claim is compared against the retained
-   `payload_hash` directly; `act` is always the plain action hash, never the
-   bound challenge hash, so offline verification is unaffected by any of this.
-   Either mismatch fails closed.
+   `canonical_json`, the attestation id being decided, and the decision being
+   submitted, and compares it to the challenge inside `clientDataJSON`. At
+   **verify time** — after the payload has been purged — the token's `act`
+   claim is compared against the retained `payload_hash` directly; `act` is
+   always the plain action hash, never the bound challenge hash, so offline
+   verification is unaffected by any of this. Either mismatch fails closed.
 
-Step 5 is the crux, and why `decision` is bound in rather than left out deserves
-recording: WebAuthn already signs its challenge, so binding a decision to the
-action needs no novel cryptography — it needs the challenge to *be derived
-from* the action hash. The obvious simpler fix — require a signature over the
-bare action hash for `deny` too, same as `approve` — was rejected, because it
-would make the two decisions sign identical bytes for the same action. That
-makes them cryptographically interchangeable: an assertion captured during a
-`deny` could be replayed as an `approve` for the same action, which is strictly
-worse than the gap it would close (an unauthenticated `deny`). Folding
-`decision` into the challenge's preimage gives `approve` and `deny` on the same
-action distinct, non-interchangeable challenges, so a signature over one can
-never stand in for the other. **Do not simplify this back to a bare
-`payload_hash` challenge shared by both decisions** — that reintroduces the
-interchangeability this section exists to rule out.
+Step 5 is the crux, and why `decision` and `att` are each bound in rather than
+left out deserves recording — two separate reasons, for two separate fields,
+found in two separate rounds:
+
+WebAuthn already signs its challenge, so binding a decision to the action
+needs no novel cryptography — it needs the challenge to *be derived from* the
+action hash. The obvious simpler fix — require a signature over the bare
+action hash for `deny` too, same as `approve` — was rejected, because it would
+make the two decisions sign identical bytes for the same action. That makes
+them cryptographically interchangeable: an assertion captured during a `deny`
+could be replayed as an `approve` for the same action, which is strictly worse
+than the gap it would close (an unauthenticated `deny`). Folding `decision`
+into the challenge's preimage gives `approve` and `deny` on the same action
+distinct, non-interchangeable challenges, so a signature over one can never
+stand in for the other.
+
+Binding `att` closes a second, separate gap that `decision` alone does not:
+nothing about creating an attestation deduplicates on `payload_hash`, so two
+independently-created attestations can legitimately carry byte-for-byte
+identical payload content, and therefore the identical `payload_hash`. Without
+the attestation id in the preimage, both attestations got the *identical*
+challenge for the same decision — a genuine signature captured approving one
+was cryptographically valid input for the other, letting an attacker mint a
+brand-new, validly-timestamped token against a completely different
+attestation using a signature the human only ever meant for the first one.
+Because the resulting token is freshly issued (its own `iat`/`exp`/`jti`), the
+threat model's stated defense against token replay — short expiry — never
+engages; the attacker isn't replaying an old token, they're using a captured
+signature to mint a new one. Binding `att` into the challenge means no two
+attestations ever share a challenge for the same decision, signed or not, so a
+captured signature is redeemable only against the one specific attestation
+record it was produced for.
+
+**Do not simplify either binding away as redundant.** Dropping `decision` back
+out reintroduces approve/deny interchangeability; dropping `att` back out
+reintroduces cross-attestation signature replay whenever two attestations
+happen to share a payload. Both fields are load-bearing for a different attack
+each, not belt-and-suspenders duplication of one.
 
 **Honest limit.** WebAuthn cannot display transaction text; authenticators sign
 opaque bytes. The binding proves the authenticator signed *this action hash*,
