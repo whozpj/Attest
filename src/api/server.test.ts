@@ -123,6 +123,50 @@ describe("every rejection writes an audit_log row, via the central error handler
   });
 });
 
+describe("the central error handler reports a Fastify-native error's own statusCode instead of hardcoding 500", () => {
+  it("malformed JSON body: Fastify's own error carries statusCode 400, so the response must be 400, not 500 — and it's still audited", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      headers: { "content-type": "application/json" },
+      payload: "{",
+    });
+    expect(res.statusCode).toBe(400);
+    expect(auditRows().some((r) => r.event === "internal_error")).toBe(true);
+  });
+
+  it("wrong content-type: Fastify's own error carries statusCode 415, so the response must be 415, not 500 — and it's still audited", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: "a=b",
+    });
+    expect(res.statusCode).toBe(415);
+    expect(auditRows().some((r) => r.event === "internal_error")).toBe(true);
+  });
+
+  it("a genuinely unhandled exception with no statusCode of its own still falls back to 500", async () => {
+    app.get("/__test/boom-2", async () => {
+      throw new Error("no statusCode on this one");
+    });
+    const res = await app.inject({ method: "GET", url: "/__test/boom-2" });
+    expect(res.statusCode).toBe(500);
+  });
+});
+
+describe("an unknown route writes an audit row instead of vanishing untracked", () => {
+  it("POST to a route that doesn't exist: 404, and an audit row is written", async () => {
+    const res = await app.inject({ method: "POST", url: "/v1/nope" });
+    expect(res.statusCode).toBe(404);
+    expect(auditRows().some((r) => r.event === "route_not_found")).toBe(true);
+  });
+
+  it("GET to a route that doesn't exist: also audited, same event name", async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/also-nope" });
+    expect(res.statusCode).toBe(404);
+    expect(auditRows().some((r) => r.event === "route_not_found")).toBe(true);
+  });
+});
+
 describe("a POST with no request body at all never reaches a handler as bare `undefined`", () => {
   // Every route handler casts `req.body as {...}` and reads fields off it
   // (`body.email`, `body.decision`, ...). When no body is sent at all (no

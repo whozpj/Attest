@@ -112,7 +112,42 @@ export async function buildServer(
     if (isFailClosed) {
       return reply.status(err.httpStatus).send({ error: err.code, message: err.message });
     }
-    return reply.status(500).send({ error: "internal_error" });
+    // Not one of our own FailClosedErrors, but Fastify's own machinery
+    // (body-parser JSON errors, content-type negotiation, etc.) throws
+    // FastifyError instances that already carry an accurate `statusCode` —
+    // e.g. 400 for malformed JSON, 415 for an unsupported content-type.
+    // Trusting that over a blanket 500 means a caller sees the right class
+    // of error (their request was bad, not that we broke) while the event
+    // itself is still audited as `internal_error` below, same as any other
+    // unrecognised throw — this only changes what status code is reported,
+    // not whether the rejection is tracked.
+    const nativeStatus = typeof (err as { statusCode?: unknown }).statusCode === "number"
+      ? (err as { statusCode: number }).statusCode
+      : 500;
+    return reply.status(nativeStatus).send({ error: "internal_error" });
+  });
+
+  // Fastify's default notFoundHandler intercepts before setErrorHandler ever
+  // sees the request, so an unknown route would otherwise write zero rows to
+  // audit_log — a blind spot design §9 doesn't allow ("every rejection
+  // writes to audit_log"). Route-space probing is a rejection like any
+  // other; this makes it one too, without changing the 404 body Fastify
+  // would have sent on its own.
+  app.setNotFoundHandler((req, reply) => {
+    q.audit(app.ctx.db, {
+      attestation_id: null,
+      event: "route_not_found",
+      actor: null,
+      detail: `${req.method} ${req.url}`,
+    });
+    // Reproduces Fastify's own default 404 body (rather than calling
+    // reply.callNotFound(), which would re-enter this same handler) so the
+    // only observable change for a real caller is the new audit row.
+    reply.status(404).send({
+      message: `Route ${req.method}:${req.url} not found`,
+      error: "Not Found",
+      statusCode: 404,
+    });
   });
 
   registerPrincipalRoutes(app);
