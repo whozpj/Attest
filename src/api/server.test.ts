@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./server.js";
-import { withAuditEvent, withAuditDetail } from "./audit-detail.js";
+import { withAuditEvent, withAuditDetail } from "../audit-detail.js";
 import { FailClosedError } from "../types.js";
 
 let app: Awaited<ReturnType<typeof buildServer>>;

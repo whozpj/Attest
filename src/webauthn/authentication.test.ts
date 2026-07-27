@@ -4,6 +4,7 @@ import { openDb } from "../db/index.js";
 import * as q from "../db/queries.js";
 import { beginApproval, challengeFor, finishApproval } from "./authentication.js";
 import { hashCanonical } from "../crypto/canonical.js";
+import { auditDetailOf, auditEventOf } from "../audit-detail.js";
 import { RP } from "./config.js";
 import type { Database } from "better-sqlite3";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
@@ -140,20 +141,23 @@ describe("beginApproval", () => {
 
 describe("finishApproval", () => {
   it("reports a counter regression as possible_credential_clone, not binding_mismatch", async () => {
+    // finishApproval no longer writes audit_log itself — that's the central
+    // HTTP handler's job now (src/api/server.ts), reading the event-name
+    // override and detail this function attaches to the thrown error via
+    // withAuditEvent/withAuditDetail. Asserting against the database here
+    // would test a layer this function no longer touches; the properties it
+    // actually owns are what's attached to the error it throws.
     q.updateSignCount(db, "YWJj", 5);
     const response = assertion(3, challengeFor(hash, "att_1", "approve"));
 
-    await expect(finishApproval(db, "prin_1", hash, "att_1", "approve", response))
-      .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
-
-    const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
-      Array<{ event: string; detail: string | null }>;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.event).toBe("possible_credential_clone");
+    const err = await finishApproval(db, "prin_1", hash, "att_1", "approve", response)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "counter_regression", httpStatus: 401 });
+    expect(auditEventOf(err)).toBe("possible_credential_clone");
     // No real key was ever involved (garbage public_key, garbage signature),
     // so this must record as unverified — an unauthenticated forger, not a
     // credential that's cryptographically proven itself compromised.
-    expect(events[0]?.detail).toMatch(/verified=false$/);
+    expect(auditDetailOf(err)).toMatch(/verified=false$/);
   });
 
   it("still reports a genuine challenge mismatch as binding_mismatch", async () => {
@@ -161,16 +165,17 @@ describe("finishApproval", () => {
     // wrong challenge, so this must fail the binding check instead.
     const response = assertion(1, "not-the-real-challenge");
 
-    await expect(finishApproval(db, "prin_1", hash, "att_1", "approve", response))
-      .rejects.toMatchObject({ code: "binding_mismatch", httpStatus: 400 });
-
-    const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
-      Array<{ event: string; detail: string | null }>;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.event).toBe("binding_mismatch");
-    // Same reasoning: no real key, so unverified — this crafted response
-    // proves nothing about whether an actual credential is compromised.
-    expect(events[0]?.detail).toMatch(/verified=false$/);
+    const err = await finishApproval(db, "prin_1", hash, "att_1", "approve", response)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "binding_mismatch", httpStatus: 400 });
+    // binding_mismatch is already both the error code and the desired event
+    // name, so there's no override — the central handler falls back to
+    // err.code, which auditEventOf correctly reports as undefined here.
+    expect(auditEventOf(err)).toBeUndefined();
+    // Same reasoning as above: no real key, so unverified — this crafted
+    // response proves nothing about whether an actual credential is
+    // compromised.
+    expect(auditDetailOf(err)).toMatch(/verified=false$/);
   });
 
   it("records verified=true when a counter regression occurs on a genuinely signed response", async () => {
@@ -189,14 +194,11 @@ describe("finishApproval", () => {
     const challenge = challengeFor(hash, "att_1", "approve");
     const response = signAssertion(cred, challenge, 1); // genuinely signed, counter=1 < stored 42
 
-    await expect(finishApproval(db, "prin_1", hash, "att_1", "approve", response))
-      .rejects.toMatchObject({ code: "counter_regression", httpStatus: 401 });
-
-    const events = db.prepare(`SELECT event, detail FROM audit_log`).all() as
-      Array<{ event: string; detail: string | null }>;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.event).toBe("possible_credential_clone");
-    expect(events[0]?.detail).toBe("stored=42 presented=1 verified=true");
+    const err = await finishApproval(db, "prin_1", hash, "att_1", "approve", response)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "counter_regression", httpStatus: 401 });
+    expect(auditEventOf(err)).toBe("possible_credential_clone");
+    expect(auditDetailOf(err)).toBe("stored=42 presented=1 verified=true");
   });
 
   it("rejects a signature captured for one attestation when submitted against a different attestation sharing the same payload", async () => {

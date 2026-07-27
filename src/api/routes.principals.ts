@@ -5,7 +5,7 @@ import type { AppContext } from "./server.js";
 import * as q from "../db/queries.js";
 import { beginRegistration, finishRegistration } from "../webauthn/registration.js";
 import { FailClosedError } from "../types.js";
-import { withAuditDetail } from "./audit-detail.js";
+import { withAuditDetail } from "../audit-detail.js";
 
 const pendingChallenges = new Map<string, string>();
 

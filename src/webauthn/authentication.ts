@@ -8,6 +8,7 @@ import {
 import type { Database } from "better-sqlite3";
 import * as q from "../db/queries.js";
 import { canonicalize, hashCanonical, hashToBytes } from "../crypto/canonical.js";
+import { withAuditDetail, withAuditEvent } from "../audit-detail.js";
 import { FailClosedError, type Decision } from "../types.js";
 import { RP } from "./config.js";
 
@@ -137,12 +138,13 @@ export async function finishApproval(
 
     if ((presentedCount > 0 || cred.sign_count > 0) && presentedCount <= cred.sign_count) {
       const verified = await signatureHolds(response, cred);
-      q.audit(db, {
-        attestation_id: attestationId, event: "possible_credential_clone",
-        actor: principalId,
-        detail: `stored=${cred.sign_count} presented=${presentedCount} verified=${verified}`,
-      });
-      throw new FailClosedError("counter_regression", 401, "authenticator counter regressed");
+      throw withAuditEvent(
+        withAuditDetail(
+          new FailClosedError("counter_regression", 401, "authenticator counter regressed"),
+          `stored=${cred.sign_count} presented=${presentedCount} verified=${verified}`,
+        ),
+        "possible_credential_clone",
+      );
     }
 
     verification = await verifyAuthenticationResponse({
@@ -170,16 +172,10 @@ export async function finishApproval(
     // separates "someone who holds the key signed the wrong thing" from
     // "someone with no key at all guessed a credential ID."
     const verified = await signatureHolds(response, cred);
-    q.audit(db, {
-      // attestation_id: the attestation this rejected decision was actually
-      // submitted against — not necessarily the one, if any, the signed
-      // material was produced for. payload_hash alone no longer identifies
-      // a single attestation (that's the whole point of this fix), so this
-      // column is what makes the row traceable to a specific record.
-      attestation_id: attestationId, event: "binding_mismatch",
-      actor: principalId, detail: `hash=${payloadHash} decision=${decision} verified=${verified}`,
-    });
-    throw new FailClosedError("binding_mismatch", 400, "signed challenge does not match action");
+    throw withAuditDetail(
+      new FailClosedError("binding_mismatch", 400, "signed challenge does not match action"),
+      `hash=${payloadHash} decision=${decision} verified=${verified}`,
+    );
   }
 
   if (!verification.verified) {
@@ -187,11 +183,10 @@ export async function finishApproval(
     // check to completion — `verified` isn't an open question here, it's
     // literally what this branch measures. Recorded for a uniform audit-row
     // shape, not because there's any ambiguity to resolve.
-    q.audit(db, {
-      attestation_id: attestationId, event: "signature_invalid",
-      actor: principalId, detail: "verified=false",
-    });
-    throw new FailClosedError("signature_invalid", 401, "signature verification failed");
+    throw withAuditDetail(
+      new FailClosedError("signature_invalid", 401, "signature verification failed"),
+      "verified=false",
+    );
   }
 
   q.updateSignCount(db, cred.credential_id, verification.authenticationInfo.newCounter);

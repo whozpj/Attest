@@ -6,7 +6,7 @@ import { openDb, type Database } from "../db/index.js";
 import { loadOrCreateKeypair, type Keypair } from "../crypto/tokens.js";
 import * as q from "../db/queries.js";
 import { FailClosedError } from "../types.js";
-import { auditDetailOf, auditEventOf } from "./audit-detail.js";
+import { auditDetailOf, auditEventOf } from "../audit-detail.js";
 import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";

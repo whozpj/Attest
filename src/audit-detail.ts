@@ -1,4 +1,4 @@
-import { FailClosedError } from "../types.js";
+import { FailClosedError } from "./types.js";
 
 const AUDIT_DETAIL = Symbol("auditDetail");
 const AUDIT_EVENT = Symbol("auditEvent");
