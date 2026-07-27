@@ -39,7 +39,11 @@ export async function finishRegistration(
   });
 
   if (!verification.verified || !verification.registrationInfo) {
-    q.audit(db, { attestation_id: null, event: "registration_failed", actor: principalId, detail: null });
+    // No direct q.audit here: the central handler in src/api/server.ts
+    // already writes one row for every FailClosedError that reaches it
+    // (cf27972). A duplicate call here was the exact defect fixed in
+    // src/webauthn/authentication.ts (a9572b7) -- see
+    // tests/security/duplicate-audit-rows.test.ts.
     throw new FailClosedError("registration_failed", 400, "registration could not be verified");
   }
 
