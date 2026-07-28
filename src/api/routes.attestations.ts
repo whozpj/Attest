@@ -7,6 +7,7 @@ import { validateEnvelope } from "../actions/schemas.js";
 import { beginApproval, finishApproval } from "../webauthn/authentication.js";
 import { effectiveStatus, recordDecision } from "./state.js";
 import { FailClosedError, type Decision } from "../types.js";
+import { notifyApprovers } from "../push/send.js";
 
 function assertDecision(decision: unknown): asserts decision is Decision {
   if (decision !== "approve" && decision !== "deny") {
@@ -72,6 +73,17 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
       required_approvals: envelope.required_approvals,
       approver_ids: envelope.approver_ids,
       expires_at: new Date(Date.now() + envelope.ttl_seconds * 1000).toISOString(),
+    });
+
+    // Best-effort: a push notification never affects whether attestation
+    // creation succeeds (see src/push/send.ts — notifyApprovers never
+    // throws). The `approve_url` response field below is unchanged; this
+    // only sends a personalized, app.html-pointing url to each approver's
+    // subscribed device(s), if any.
+    await notifyApprovers(db, app.ctx.vapid, envelope.approver_ids, {
+      attestation_id: attestationId,
+      headline: action.summary.headline,
+      approveUrlBase: `http://localhost:3000/approve/app.html?attestation=${attestationId}`,
     });
 
     return reply.status(201).send({

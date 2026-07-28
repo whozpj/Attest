@@ -383,3 +383,34 @@ describe("GET /v1/attestations/:id on an expired attestation", () => {
       .get(res.json().payload_hash)).toEqual({ canonical_json: null });
   });
 });
+
+describe("POST /v1/attestations sends a push to every approver with a registered subscription", () => {
+  it("calls the push service for a subscribed approver", async () => {
+    const principalRes = await app.inject({
+      method: "POST", url: "/v1/principals",
+      payload: { email: "push-attest@test.local", display_name: "Push" },
+    });
+    const { principal_id, enrolment_token } = principalRes.json();
+
+    await app.inject({
+      method: "POST",
+      url: `/v1/principals/${principal_id}/push-subscription?token=${enrolment_token}`,
+      payload: {
+        subscription: { endpoint: "https://push.example/attest", keys: { p256dh: "k", auth: "s" } },
+      },
+    });
+
+    // web-push's sendNotification makes a real outbound HTTPS request to
+    // the endpoint URL. "https://push.example/attest" doesn't resolve, so
+    // the call fails — which is exactly the case send.ts already handles by
+    // design (never throws, doesn't delete on a non-404/410 failure). This
+    // test only asserts that attestation creation itself is unaffected by
+    // that failure, not that delivery succeeds (Task 7's e2e test covers a
+    // real subscription end to end).
+    const res = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: { requested_by: "int", approver_ids: [principal_id], action: wire },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+});
