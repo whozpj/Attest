@@ -123,5 +123,9 @@ This is a prototype, not a production system:
 
 - The signing key sits on disk unencrypted.
 - There is no device-loss recovery.
-- Push delivery is replaced by a local URL.
+- Push delivery is real (Web Push, VAPID-based), but subscriptions are
+  registered at enrolment time only — there's no re-subscribe flow after
+  device loss or cleared site data.
+- There is no native iOS/Android app: this is a browser-installable PWA
+  using the same WebAuthn/Face-ID mechanism, only packaging differs.
 - None of this is production-ready.

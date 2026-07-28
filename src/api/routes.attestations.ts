@@ -80,7 +80,15 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     // throws). The `approve_url` response field below is unchanged; this
     // only sends a personalized, app.html-pointing url to each approver's
     // subscribed device(s), if any.
-    await notifyApprovers(db, app.ctx.vapid, envelope.approver_ids, {
+    //
+    // Fire-and-forget, deliberately not awaited: each send is a real
+    // outbound HTTPS request with no timeout configured, so a slow or
+    // blackholed push endpoint must never add latency to (or, worst case,
+    // block on an OS-level TCP timeout) the attestation-creation request
+    // path. notifyApprovers is guaranteed to never throw or reject (see the
+    // outer try/catch around the per-principal loop body in
+    // src/push/send.ts), so this is safe with zero unhandled-rejection risk.
+    void notifyApprovers(db, app.ctx.vapid, envelope.approver_ids, {
       attestation_id: attestationId,
       headline: action.summary.headline,
       approveUrlBase: `http://localhost:3000/approve/app.html?attestation=${attestationId}`,
