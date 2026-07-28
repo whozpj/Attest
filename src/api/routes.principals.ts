@@ -63,6 +63,25 @@ function assertEnrolmentTokenValid(db: Database, principalId: string, token: unk
   }
 }
 
+/**
+ * Non-consuming peek for POST .../credentials, mirroring
+ * assertEnrolmentTokenValid's four conditions (exists, bound to this
+ * principal, unused, unexpired) but as a boolean rather than a throw --
+ * this endpoint's opaque rejection is "no_pending_registration"/400, not
+ * options's "unknown_principal"/404, so it can't just call that function.
+ * Deliberately read-only: the actual single-use burn happens later, via
+ * consumeEnrolmentToken, only after a successful ceremony.
+ */
+function enrolmentTokenLooksUsable(db: Database, principalId: string, token: unknown): boolean {
+  if (typeof token !== "string" || token.length === 0) return false;
+  const row = q.getEnrolmentToken(db, token);
+  if (!row) return false;
+  if (row.principal_id !== principalId) return false;
+  if (row.used_at !== null) return false;
+  if (Date.parse(row.expires_at) <= Date.now()) return false;
+  return true;
+}
+
 export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext }): void {
   app.post("/v1/principals", async (req, reply) => {
     const body = req.body as { email?: unknown; display_name?: unknown };
@@ -120,17 +139,17 @@ export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext
     const { id } = req.params as { id: string };
     const { token } = req.query as { token?: unknown };
 
-    // Same opaque code the "no pending challenge" branch below already uses
-    // for an unknown principal — a bad token must not be distinguishable
-    // from either "you never called .../options" or "this principal doesn't
-    // exist". Consuming here (not just checking) is what makes this a
-    // single-use token: the atomic UPDATE inside consumeEnrolmentToken means
-    // a token can pass this gate at most once, closing the same TOCTOU shape
-    // already fixed in state.ts's approval path. A ceremony that fails after
-    // this point (bad signature, etc.) still leaves the token burned — an
-    // accepted prototype-scope trade-off for keeping the gate race-free —
-    // so a failed enrolment attempt requires re-issuing a fresh token.
-    if (typeof token !== "string" || token.length === 0 || !q.consumeEnrolmentToken(app.ctx.db, token, id)) {
+    // Bug fixed here: this used to consume (burn) the token BEFORE calling
+    // finishRegistration, so any ceremony failure (malformed response,
+    // origin mismatch, wrong browser, anything) left the token already
+    // spent -- with no re-issue endpoint anywhere, and principals.email
+    // UNIQUE meaning the principal could never be re-created either. That
+    // permanently bricked the principal on the single most mundane failure.
+    //
+    // Fix: a non-consuming peek first (same opaque code as before, still
+    // never distinguishing missing/wrong/expired/used), then verification,
+    // and only burn the token once verification actually succeeds.
+    if (!enrolmentTokenLooksUsable(app.ctx.db, id, token)) {
       throw withAuditDetail(
         new FailClosedError(
           "no_pending_registration", 400, "no pending registration challenge for this principal",
@@ -138,6 +157,7 @@ export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext
         "missing, wrong, expired, or already-used enrolment token",
       );
     }
+    const tokenStr = token as string;
 
     const challenge = pendingChallenges.get(id);
     if (!challenge) {
@@ -145,8 +165,39 @@ export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext
         "no_pending_registration", 400, "no pending registration challenge for this principal",
       );
     }
-    pendingChallenges.delete(id);
+
+    // Deliberately NOT deleting the pendingChallenges entry yet: it's only
+    // removed once the token is actually, successfully burned below. A
+    // ceremony that throws here (bad signature, malformed response, etc.)
+    // makes no DB writes of its own (see src/webauthn/registration.ts) and
+    // leaves both the token and the challenge exactly as they were, so a
+    // retry under the same token needs nothing re-issued.
     const result = await finishRegistration(app.ctx.db, id, challenge, req.body as never);
+
+    // Verification succeeded -- and, as an inseparable part of that same
+    // call, finishRegistration already persisted the credential (it cannot
+    // verify without writing, and webauthn/registration.ts is out of scope
+    // to change here). Burn the token now, atomically. Two different,
+    // genuinely-successful ceremonies (two different authenticators) can
+    // race here on one still-unspent token; credentials.credential_id being
+    // UNIQUE does not stop both from persisting, since two authenticators
+    // produce two different credential ids. consumeEnrolmentToken's atomic
+    // check-and-burn UPDATE is what picks the single winner: if this call
+    // loses -- because a concurrent request already burned the token first
+    // -- undo the credential this call just persisted, and reject with the
+    // exact same opaque shape a spent token always produces. This request's
+    // own signature was cryptographically valid; that fact must not leak.
+    if (!q.consumeEnrolmentToken(app.ctx.db, tokenStr, id)) {
+      q.deleteCredential(app.ctx.db, result.credential_id);
+      throw withAuditDetail(
+        new FailClosedError(
+          "no_pending_registration", 400, "no pending registration challenge for this principal",
+        ),
+        "enrolment token consumed by a concurrent request during the ceremony",
+      );
+    }
+    pendingChallenges.delete(id);
+
     return reply.status(201).send(result);
   });
 }

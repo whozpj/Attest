@@ -167,6 +167,23 @@ export function consumeEnrolmentToken(db: Database, token: string, principalId: 
   return result.changes === 1;
 }
 
+/**
+ * Compensating delete for the enrolment-token race in
+ * routes.principals.ts's POST /credentials handler. finishRegistration
+ * (src/webauthn/registration.ts) persists the credential as an inseparable
+ * part of a successful verification -- it cannot be told to verify without
+ * writing. When two different, genuinely-successful ceremonies (two
+ * different authenticators) race on one still-unspent enrolment token, only
+ * one can win the atomic consumeEnrolmentToken call; the loser's
+ * already-persisted row must be undone so it never actually attaches to the
+ * principal, even though its own signature was cryptographically valid.
+ * Deleting by credential_id (not the internal `id` PK) because that's the
+ * only identifier finishRegistration's return value exposes.
+ */
+export function deleteCredential(db: Database, credentialId: string): void {
+  db.prepare(`DELETE FROM credentials WHERE credential_id = ?`).run(credentialId);
+}
+
 export function audit(
   db: Database,
   e: { attestation_id: string | null; event: string; actor: string | null; detail: string | null },

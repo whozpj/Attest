@@ -41,6 +41,9 @@ vi.mock("../webauthn/registration.js", async (importOriginal) => {
 
 import { buildServer } from "./server.js";
 import { finishRegistration } from "../webauthn/registration.js";
+import * as q from "../db/queries.js";
+import { FailClosedError } from "../types.js";
+import type { Database } from "better-sqlite3";
 
 let app: Awaited<ReturnType<typeof buildServer>>;
 
@@ -206,5 +209,170 @@ describe("POST /v1/principals/:id/credentials requires the enrolment token", () 
     expect(second.statusCode).toBe(400);
     expect(second.json().error).toBe("no_pending_registration");
     expect(finishRegistration).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Bug: a failed enrolment ceremony permanently bricks the principal.
+//
+// The route used to consume (burn) the single-use enrolment token BEFORE
+// calling finishRegistration -- so any ceremony failure (malformed
+// response, origin mismatch, wrong browser, anything) left the token
+// already spent with no way to retry and no re-issue endpoint. Since
+// principals.email is UNIQUE, that principal could never enrol a passkey
+// again.
+//
+// Fix: verify first (finishRegistration), and only burn the token once
+// that verification actually succeeds. Because finishRegistration
+// (src/webauthn/registration.ts) persists the credential as an
+// inseparable part of a successful verification -- it cannot verify
+// without writing, and this file must not touch webauthn/registration.ts
+// -- two different, genuinely-successful ceremonies (two different
+// authenticators) can both reach that persistence step while racing on
+// one still-unspent token. The atomic consumeEnrolmentToken call after
+// verification is what decides the single winner; the loser's
+// already-persisted row is deleted (queries.ts's deleteCredential) so it
+// never actually attaches to the principal, and the loser is rejected
+// with the exact same opaque shape a spent token always produces.
+describe("a failed enrolment ceremony must not permanently brick the principal", () => {
+  it("a failed/garbage registration response leaves the enrolment token unspent in the DB", async () => {
+    const { principalId, token } = await createPrincipal("brick-repro@test.local");
+    await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials/options?token=${token}`,
+    });
+
+    vi.mocked(finishRegistration).mockRejectedValueOnce(
+      new FailClosedError("registration_failed", 400, "registration could not be verified"),
+    );
+    const failed = await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+      payload: { garbage: "not a real webauthn response" },
+    });
+    expect(failed.statusCode).toBe(400);
+
+    const row = app.ctx.db.prepare(`SELECT used_at FROM enrolment_tokens WHERE token = ?`).get(token) as
+      { used_at: string | null };
+    expect(row.used_at).toBeNull();
+  });
+
+  it("a second, genuine registration attempt under the same token succeeds after a failed first attempt", async () => {
+    const { principalId, token } = await createPrincipal("brick-retry@test.local");
+    await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials/options?token=${token}`,
+    });
+
+    vi.mocked(finishRegistration).mockRejectedValueOnce(
+      new FailClosedError("registration_failed", 400, "registration could not be verified"),
+    );
+    const failed = await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+      payload: { garbage: "not a real webauthn response" },
+    });
+    expect(failed.statusCode).toBe(400);
+
+    // Retry, same token, this time a genuine ceremony (mock resolves
+    // normally again -- the default implementation set in beforeEach).
+    await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials/options?token=${token}`,
+    });
+    const retry = await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+      payload: { id: "genuine_cred_after_retry" },
+    });
+    expect(retry.statusCode).toBe(201);
+
+    const row = app.ctx.db.prepare(`SELECT used_at FROM enrolment_tokens WHERE token = ?`).get(token) as
+      { used_at: string | null };
+    expect(row.used_at).not.toBeNull();
+  });
+
+  it("a successful ceremony still burns the token -- a second attempt is rejected the same way a spent token always is", async () => {
+    const { principalId, token } = await createPrincipal("burn-on-success@test.local");
+    await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials/options?token=${token}`,
+    });
+    const first = await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+      payload: { id: "cred_first" },
+    });
+    expect(first.statusCode).toBe(201);
+
+    await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials/options?token=${token}`,
+    });
+    const second = await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+      payload: { id: "cred_second_valid_looking" },
+    });
+    expect(second.statusCode).toBe(400);
+    expect(second.json()).toEqual({
+      error: "no_pending_registration",
+      message: "no pending registration challenge for this principal",
+    });
+  });
+
+  it("two concurrent, genuinely-successful ceremonies (two different authenticators) racing on one still-unspent token: exactly one credential persists, the other is rejected identically to a spent-token rejection", async () => {
+    const { principalId, token } = await createPrincipal("race-two-auth@test.local");
+    await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials/options?token=${token}`,
+    });
+
+    // Each mock implementation does what the real finishRegistration does on
+    // success (src/webauthn/registration.ts): persists a credential row,
+    // then returns its credential_id. A small delay forces both requests to
+    // genuinely be in flight together, rather than relying on incidental
+    // Fastify dispatch timing.
+    vi.mocked(finishRegistration)
+      .mockImplementationOnce(async (db, pid) => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        q.insertCredential(db as Database, {
+          id: "cred_row_authenticator_1", principal_id: pid as string, credential_id: "authenticator_1",
+          public_key: Buffer.from([1]), transports: null,
+        });
+        return { credential_id: "authenticator_1" };
+      })
+      .mockImplementationOnce(async (db, pid) => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        q.insertCredential(db as Database, {
+          id: "cred_row_authenticator_2", principal_id: pid as string, credential_id: "authenticator_2",
+          public_key: Buffer.from([2]), transports: null,
+        });
+        return { credential_id: "authenticator_2" };
+      });
+
+    const [r1, r2] = await Promise.allSettled([
+      app.inject({
+        method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+        payload: { id: "authenticator_1" },
+      }),
+      app.inject({
+        method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+        payload: { id: "authenticator_2" },
+      }),
+    ]);
+
+    const results = [r1, r2].map((r) => (r.status === "fulfilled" ? r.value : null));
+    const codes = results.map((r) => r?.statusCode);
+    expect(codes.filter((c) => c === 201).length).toBe(1);
+    expect(codes.filter((c) => c === 400).length).toBe(1);
+
+    const loser = results.find((r) => r?.statusCode === 400);
+    expect(loser?.json()).toEqual({
+      error: "no_pending_registration",
+      message: "no pending registration challenge for this principal",
+    });
+
+    const row = app.ctx.db.prepare(
+      `SELECT COUNT(*) as n FROM credentials WHERE principal_id = ?`,
+    ).get(principalId) as { n: number };
+    expect(row.n).toBe(1);
+
+    // The rejection is byte-for-byte identical to an ordinary already-spent
+    // token rejection -- no distinguishable "you lost a race" signal.
+    const spentTokenProbe = await app.inject({
+      method: "POST", url: `/v1/principals/${principalId}/credentials?token=${token}`,
+      payload: { id: "third_attempt" },
+    });
+    expect(spentTokenProbe.statusCode).toBe(400);
+    expect(loser?.body).toBe(spentTokenProbe.body);
   });
 });
