@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Human-Attest</title>
+<link rel="manifest" href="/approve/manifest.json" />
+<meta name="theme-color" content="#0b0f14" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0b0f14; color: #eef2f5;
+    font: 16px/1.5 system-ui, -apple-system, sans-serif; padding: 1.5rem;
+  }
+  .card {
+    width: 100%; max-width: 24rem; background: #131a22; border: 1px solid #1f2a35;
+    border-radius: 20px; padding: 1.75rem; box-shadow: 0 20px 60px rgba(0,0,0,.4);
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: .4rem; font: 600 .7rem/1 system-ui, sans-serif;
+    text-transform: uppercase; letter-spacing: .06em; color: #3ddc97;
+    background: rgba(61,220,151,.12); padding: .35rem .6rem; border-radius: 999px;
+  }
+  h1 { font-size: 1.25rem; margin: 1rem 0 1.25rem; text-wrap: balance; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .5rem 1.25rem; margin: 0 0 1.5rem; }
+  dt { font: 600 .7rem/1.6 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .04em; color: #7b8794; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: .75rem; }
+  button {
+    flex: 1; font: 600 .95rem system-ui, sans-serif; padding: .85rem 1rem; border-radius: 12px;
+    border: none; cursor: pointer;
+  }
+  #approve { background: #3ddc97; color: #06120c; }
+  #deny { background: #262f3a; color: #eef2f5; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 1rem; font: .8rem/1.4 ui-monospace, monospace; color: #7b8794; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div class="card">
+  <span class="badge">Approval requested</span>
+  <h1 id="headline">Loading…</h1>
+  <dl id="fields"></dl>
+  <div class="actions">
+    <button id="deny">Deny</button>
+    <button id="approve">Approve</button>
+  </div>
+  <p id="status"></p>
+</div>
+
+<script src="/vendor/simplewebauthn-browser.js"></script>
+<script type="module">
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/approve/sw.js").catch(() => {});
+  }
+
+  const params = new URLSearchParams(location.search);
+  const attestationId = params.get("attestation");
+  const principalId = params.get("principal");
+  const status = document.getElementById("status");
+  const approveBtn = document.getElementById("approve");
+  const denyBtn = document.getElementById("deny");
+
+  const res = await fetch(`/v1/attestations/${attestationId}`);
+  const att = await res.json();
+
+  document.getElementById("headline").textContent =
+    att.summary ? att.summary.headline : `Attestation is ${att.status}`;
+
+  // Same rule as index.html: caller-controlled payload text is rendered via
+  // textContent only, never innerHTML.
+  const fieldsList = document.getElementById("fields");
+  fieldsList.replaceChildren();
+  for (const f of att.summary?.fields ?? []) {
+    const dt = document.createElement("dt");
+    dt.textContent = f.label;
+    const dd = document.createElement("dd");
+    dd.textContent = f.value;
+    fieldsList.append(dt, dd);
+  }
+
+  if (att.status !== "pending") {
+    approveBtn.disabled = true;
+    denyBtn.disabled = true;
+    status.textContent = `already ${att.status}`;
+  }
+
+  async function signAndDecide(decisionValue) {
+    approveBtn.disabled = true;
+    denyBtn.disabled = true;
+    status.textContent = "Requesting signature…";
+    const optsRes = await fetch(`/v1/attestations/${attestationId}/options`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principal_id: principalId, decision: decisionValue }),
+    });
+    const response = await SimpleWebAuthnBrowser.startAuthentication({
+      optionsJSON: await optsRes.json(),
+    });
+    const decisionRes = await fetch(`/v1/attestations/${attestationId}/decision`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principal_id: principalId, decision: decisionValue, response }),
+    });
+    status.textContent = JSON.stringify(await decisionRes.json());
+  }
+
+  approveBtn.onclick = () => signAndDecide("approve");
+  denyBtn.onclick = () => signAndDecide("deny");
+</script>
+</body>
+</html>
