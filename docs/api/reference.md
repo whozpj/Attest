@@ -301,6 +301,13 @@ credentials. Calling this twice for the same attestation and principal with
 | 400 | `invalid_decision` — `decision` missing or not `"approve"`/`"deny"` |
 | 400 | `payload_invalid` — `principal_id` missing or not a string |
 | 400 | `no_credential` — the principal has no enrolled passkey |
+| 410 | `expired` — the attestation's TTL has elapsed; no challenge is issued |
+
+Expiry is checked first, before anything else about the request — the same
+`effectiveStatus` read that `GET /v1/attestations/:id` and `.../decision`
+already use. An expired attestation never hands out a live WebAuthn
+challenge or the approver's real credential IDs, regardless of what else is
+wrong or right about the request.
 
 ---
 
@@ -371,12 +378,26 @@ them can be used to force a resolution.
 | 401 | `signature_invalid` — signature verification failed |
 | 401 | `counter_regression` — the authenticator's signature counter went backwards — **not on its own proof of a cloned credential** (see note below) |
 | 410 | `expired` — the attestation's TTL has elapsed |
-| 409 | `already_resolved` — the attestation is already `approved`, `denied`, or `expired` |
+| 409 | `already_resolved` — the **attestation** is already `approved`, `denied`, or `expired` |
+| 409 | `already_decided` — this **principal** already recorded a decision for this attestation, even though the attestation itself may still be `pending` on other approvers |
 | 403 | `not_an_approver` — this principal is not in `approver_ids` for this attestation |
 
-A rejected decision (any 4xx/401 above) never resolves the attestation — an
-attacker who can't produce a valid signature can't force it to `denied` by
-throwing failed attempts at this endpoint; it stays `pending`.
+`already_resolved` and `already_decided` are easy to conflate; they are not
+the same condition. `already_resolved` means the whole attestation has
+reached a terminal state — nobody can decide on it anymore, regardless of
+who they are. `already_decided` means this specific principal already
+submitted a decision, but the attestation may still be legitimately
+`pending`, waiting on the rest of a multi-approver quorum. A second,
+genuinely fresh and validly-signed decision from the same principal is
+rejected as `already_decided` — one signature counts once toward
+`required_approvals`, never twice, even when nothing about the second
+attempt is itself invalid.
+
+A rejected decision (any 4xx/401/409 above) never resolves the attestation
+— an attacker who can't produce a valid signature can't force it to
+`denied` by throwing failed attempts at this endpoint, and a principal who
+already decided can't inflate their own vote by deciding again; it stays
+exactly as it was.
 
 **`binding_mismatch` and `counter_regression` do not, by themselves, prove a
 real authenticator produced the request.** Both fire before the actual
