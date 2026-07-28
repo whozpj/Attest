@@ -17,6 +17,8 @@ shape of each body — not the runtime behavior of a deployed instance.
 - [`POST /v1/principals`](#post-v1principals)
 - [`POST /v1/principals/:id/credentials/options`](#post-v1principalsidcredentialsoptions)
 - [`POST /v1/principals/:id/credentials`](#post-v1principalsidcredentials)
+- [`GET /v1/push/vapid-public-key`](#get-v1pushvapid-public-key)
+- [`POST /v1/principals/:id/push-subscription`](#post-v1principalsidpush-subscription)
 - [`POST /v1/attestations`](#post-v1attestations)
 - [`GET /v1/attestations/:id`](#get-v1attestationsid)
 - [`POST /v1/attestations/:id/options`](#post-v1attestationsidoptions)
@@ -152,6 +154,72 @@ WebAuthn ceremony is checked, so a failed ceremony (bad signature, etc.)
 still burns the token — a design partner retrying a failed enrolment needs
 to call `POST /v1/principals` again for a fresh one, not just retry
 `.../credentials`.
+
+---
+
+### `GET /v1/push/vapid-public-key`
+
+Returns the VAPID public key for Web Push subscription setup. No authentication required — this endpoint is called by browsers during the subscription flow.
+
+**Request:** no body or query parameters.
+
+```
+GET /v1/push/vapid-public-key
+```
+
+**Response** — `200 OK`
+
+```json
+{ "publicKey": "<base64url VAPID public key>" }
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 200 | Key returned |
+
+---
+
+### `POST /v1/principals/:id/push-subscription`
+
+Registers a principal for Web Push notifications. Establishes the push subscription at enrolment time only, bundled into the existing token-gated credential flow. The subscription is tied to the principal's enrolment and cannot be changed or re-registered later without starting enrolment over.
+
+**Request:** body and query parameter `token` (required) — the `enrolment_token` from `POST /v1/principals`, the same token used for credential registration.
+
+```
+POST /v1/principals/prin_abc123/push-subscription?token=<enrolment_token>
+```
+
+**Request body**
+
+```json
+{
+  "subscription": {
+    "endpoint": "https://fcm.googleapis.com/...",
+    "keys": {
+      "p256dh": "<base64url>",
+      "auth": "<base64url>"
+    }
+  }
+}
+```
+
+**Response** — `201 Created`
+
+```json
+{ "ok": true }
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 201 | Subscription registered |
+| 400 | `push_subscription_invalid` — request body is malformed (missing `subscription`, `endpoint`, or `keys`) |
+| 404 | `unknown_principal` — no principal with this id, **or** `token` is missing, malformed, bound to a different principal, expired, or already used (see [`POST /v1/principals/:id/credentials/options`](#post-v1principalsidcredentialsoptions) for the same non-consuming token-check semantics) |
+
+Like the credential enrolment endpoints, this call only *checks* the token — it does not consume it. The same `enrolment_token` can be used for both the credential and push-subscription flows within the same enrolment window, but (per design) the push subscription can never be updated or re-registered later. A principal whose stored push subscription is lost (device cleared, browser data deleted) would need to complete enrolment again for a fresh subscription.
 
 ---
 

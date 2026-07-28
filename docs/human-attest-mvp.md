@@ -232,12 +232,21 @@ significantly.
 5. Basic audit log / dashboard so a design partner can see attestation history
 
 Explicitly **cut for v0**: liveness detection, multi-party approval, SDKs
-for every language (start with a REST API + one client library), any mobile
-native app (web push / passkeys work in-browser).
+for every language (start with a REST API + one client library).
 
 ---
 
-## 9. Pricing sketch (v0 hypothesis)
+## 9. Prototype limitations and constraints
+
+This MVP implements real Web Push delivery (VAPID-based) and a browser-installable PWA approval card. However, the following deliberate constraints apply:
+
+- **Web Push subscriptions are time-limited to enrolment.** Real Web Push delivery is now implemented (VAPID, registered at enrolment time only). Push subscriptions are established as part of the credential registration flow and cannot be updated or re-registered later — re-subscribing after device loss or cleared site data is out of scope for this plan. This is deliberate: bundling subscription into the existing token-gated enrolment flow avoids a new standalone unauthenticated endpoint.
+- **No native iOS/Android app.** This is a browser-installable PWA; the WebAuthn/Face-ID mechanism is identical, only packaging differs. A native app would require a build toolchain, device provisioning, and developer accounts not available in this environment.
+- **Push subscriptions cannot be established in ephemeral/headless browser contexts.** Automated testing via Playwright (which uses Chromium's headless mode with ephemeral profiles) cannot establish real push subscriptions — the Push API requires a persistent browser profile. This only affects testing; real users with real persistent browser profiles can subscribe and receive notifications normally. This is a verified constraint of the testing environment, not the production code.
+
+---
+
+## 10. Pricing sketch (v0 hypothesis)
 
 Usage-based, Twilio-style: **per-attestation pricing tiered by challenge
 strength** — e.g. $0.05 for Tier 1 passkey, $0.50+ for Tier 3 liveness,
@@ -248,7 +257,7 @@ design-partner conversations before committing — the honest answer is this
 is a hypothesis, but walking in without *any* pricing model reads as
 unserious.
 
-## 10. Open technical questions to resolve early
+## 11. Open technical questions to resolve early
 
 - **Key custody**: do principals hold their own private key (self-custodial, more trust but harder onboarding) or do you manage key material in an HSM on their behalf (easier onboarding, but you become a juicier attack target and a bigger liability)?
 - **Recovery**: what happens when someone loses their device? This is the classic passkey UX problem and you'll need a real answer before any serious customer trusts you.
