@@ -100,4 +100,29 @@ describe("notifyApprovers", () => {
       approveUrlBase: "http://x/approve/app.html?attestation=att_1",
     })).resolves.toBeUndefined();
   });
+
+  it("never throws, even when getPushSubscriptionsFor fails", async () => {
+    vi.spyOn(q, "getPushSubscriptionsFor").mockImplementationOnce(() => {
+      throw new Error("database error");
+    });
+    await expect(notifyApprovers(db, vapid, ["prin_1"], {
+      attestation_id: "att_1", headline: "x",
+      approveUrlBase: "http://x/approve/app.html?attestation=att_1",
+    })).resolves.toBeUndefined();
+  });
+
+  it("never throws, even when deletePushSubscription fails", async () => {
+    q.upsertPushSubscription(db, {
+      id: "psub_1", principal_id: "prin_1",
+      endpoint: "https://push.example/gone", p256dh: "k", auth: "s",
+    });
+    vi.spyOn(q, "deletePushSubscription").mockImplementationOnce(() => {
+      throw new Error("delete failed");
+    });
+    sendNotification.mockRejectedValueOnce(Object.assign(new Error("gone"), { statusCode: 410 }));
+    await expect(notifyApprovers(db, vapid, ["prin_1"], {
+      attestation_id: "att_1", headline: "x",
+      approveUrlBase: "http://x/approve/app.html?attestation=att_1",
+    })).resolves.toBeUndefined();
+  });
 });

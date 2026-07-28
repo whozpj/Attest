@@ -23,32 +23,37 @@ export async function notifyApprovers(
   db: Database, vapid: VapidKeys, approverIds: string[], notice: PushNotice,
 ): Promise<void> {
   for (const principalId of approverIds) {
-    const subs = q.getPushSubscriptionsFor(db, principalId);
-    if (subs.length === 0) continue;
+    try {
+      const subs = q.getPushSubscriptionsFor(db, principalId);
+      if (subs.length === 0) continue;
 
-    const message = JSON.stringify({
-      title: "Approval requested",
-      body: notice.headline,
-      attestation_id: notice.attestation_id,
-      url: `${notice.approveUrlBase}&principal=${principalId}`,
-    });
+      const message = JSON.stringify({
+        title: "Approval requested",
+        body: notice.headline,
+        attestation_id: notice.attestation_id,
+        url: `${notice.approveUrlBase}&principal=${principalId}`,
+      });
 
-    for (const sub of subs) {
-      try {
-        await webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          message,
-          { vapidDetails: { subject: VAPID_SUBJECT, publicKey: vapid.publicKey, privateKey: vapid.privateKey } },
-        );
-      } catch (err) {
-        // 404/410 is the push service's standard signal that the
-        // subscription is gone (unsubscribed, expired) — anything else is
-        // treated as transient and left in place for the next attempt.
-        const statusCode = (err as { statusCode?: number }).statusCode;
-        if (statusCode === 404 || statusCode === 410) {
-          q.deletePushSubscription(db, sub.endpoint);
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            message,
+            { vapidDetails: { subject: VAPID_SUBJECT, publicKey: vapid.publicKey, privateKey: vapid.privateKey } },
+          );
+        } catch (err) {
+          // 404/410 is the push service's standard signal that the
+          // subscription is gone (unsubscribed, expired) — anything else is
+          // treated as transient and left in place for the next attempt.
+          const statusCode = (err as { statusCode?: number }).statusCode;
+          if (statusCode === 404 || statusCode === 410) {
+            q.deletePushSubscription(db, sub.endpoint);
+          }
         }
       }
+    } catch (err) {
+      // Silently swallow any error (database errors, message encoding, etc.)
+      // from processing this principal so we can try the next one.
     }
   }
 }
