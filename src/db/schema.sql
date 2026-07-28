@@ -60,6 +60,15 @@ CREATE TABLE IF NOT EXISTS enrolment_tokens (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(id),
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attestation_id TEXT,

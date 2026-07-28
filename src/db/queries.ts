@@ -184,6 +184,44 @@ export function deleteCredential(db: Database, credentialId: string): void {
   db.prepare(`DELETE FROM credentials WHERE credential_id = ?`).run(credentialId);
 }
 
+/**
+ * `endpoint` is UNIQUE per push_subscriptions. A conflict means the same
+ * browser subscription is being re-registered — legitimately reachable if a
+ * principal re-opens enrol.html (e.g. after clearing site data and
+ * re-subscribing with the same still-cached service-worker registration) —
+ * so this rebinds it rather than throwing, taking whichever principal_id
+ * last proved token possession for that endpoint.
+ */
+export function upsertPushSubscription(
+  db: Database,
+  s: { id: string; principal_id: string; endpoint: string; p256dh: string; auth: string },
+): void {
+  db.prepare(
+    `INSERT INTO push_subscriptions (id, principal_id, endpoint, p256dh, auth, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET
+       principal_id = excluded.principal_id,
+       p256dh = excluded.p256dh,
+       auth = excluded.auth`,
+  ).run(s.id, s.principal_id, s.endpoint, s.p256dh, s.auth, now());
+}
+
+export function getPushSubscriptionsFor(db: Database, principalId: string) {
+  return db.prepare(`SELECT * FROM push_subscriptions WHERE principal_id = ?`).all(principalId) as Array<{
+    id: string; principal_id: string; endpoint: string; p256dh: string; auth: string;
+  }>;
+}
+
+/**
+ * Called when the push service itself reports the subscription is gone
+ * (404/410 from a send attempt) — the standard web-push hygiene signal that
+ * the browser unsubscribed or the endpoint expired, so retrying it forever
+ * would just accumulate permanent failures.
+ */
+export function deletePushSubscription(db: Database, endpoint: string): void {
+  db.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?`).run(endpoint);
+}
+
 export function audit(
   db: Database,
   e: { attestation_id: string | null; event: string; actor: string | null; detail: string | null },

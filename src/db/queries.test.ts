@@ -157,3 +157,44 @@ describe("approvals", () => {
     expect(approvals.map((a) => a.principal_id)).toEqual(["prin_2", "prin_1"]);
   });
 });
+
+describe("push subscriptions", () => {
+  beforeEach(() => {
+    q.insertPrincipal(db, { id: "prin_1", email: "a@b.test", display_name: "A" });
+  });
+
+  it("round-trips a push subscription for a principal", () => {
+    q.upsertPushSubscription(db, {
+      id: "psub_1", principal_id: "prin_1",
+      endpoint: "https://push.example/abc", p256dh: "p256dh-key", auth: "auth-secret",
+    });
+    const subs = q.getPushSubscriptionsFor(db, "prin_1");
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({ endpoint: "https://push.example/abc", p256dh: "p256dh-key", auth: "auth-secret" });
+  });
+
+  it("rebinds an existing endpoint to whichever principal last registered it, rather than throwing", () => {
+    q.insertPrincipal(db, { id: "prin_2", email: "b@b.test", display_name: "B" });
+    q.upsertPushSubscription(db, {
+      id: "psub_1", principal_id: "prin_1",
+      endpoint: "https://push.example/shared", p256dh: "key-1", auth: "auth-1",
+    });
+    q.upsertPushSubscription(db, {
+      id: "psub_2", principal_id: "prin_2",
+      endpoint: "https://push.example/shared", p256dh: "key-2", auth: "auth-2",
+    });
+    expect(q.getPushSubscriptionsFor(db, "prin_1")).toHaveLength(0);
+    const subs = q.getPushSubscriptionsFor(db, "prin_2");
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({ endpoint: "https://push.example/shared", p256dh: "key-2", auth: "auth-2" });
+  });
+
+  it("deletes a subscription by endpoint", () => {
+    q.upsertPushSubscription(db, {
+      id: "psub_1", principal_id: "prin_1",
+      endpoint: "https://push.example/gone", p256dh: "key", auth: "auth",
+    });
+    q.deletePushSubscription(db, "https://push.example/gone");
+    expect(q.getPushSubscriptionsFor(db, "prin_1")).toHaveLength(0);
+  });
+});
