@@ -1,6 +1,7 @@
 <!doctype html>
 <meta charset="utf-8" />
 <title>Enrol passkey</title>
+<link rel="manifest" href="/approve/manifest.json" />
 <button id="enrol">Enrol passkey</button>
 <p id="status"></p>
 <script src="/vendor/simplewebauthn-browser.js"></script>
@@ -8,7 +9,36 @@
   const params = new URLSearchParams(location.search);
   const principalId = params.get("principal");
   const token = params.get("token");
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+  }
+
+  // Best-effort: registering for push must never block passkey enrolment.
+  // Run before the WebAuthn ceremony below, because the enrolment token is
+  // single-use and only burned once that ceremony finishes successfully —
+  // this registration needs the token to still be live (see routes.push.ts).
+  async function subscribeToPush() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    const reg = await navigator.serviceWorker.register("/approve/sw.js");
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+    const { publicKey } = await fetch("/v1/push/vapid-public-key").then((r) => r.json());
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    await fetch(`/v1/principals/${principalId}/push-subscription?token=${token}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subscription: subscription.toJSON() }),
+    });
+  }
+
   document.getElementById("enrol").onclick = async () => {
+    await subscribeToPush().catch(() => {});
     const optionsJSON = await fetch(`/v1/principals/${principalId}/credentials/options?token=${token}`, {
       method: "POST",
     }).then((r) => r.json());
