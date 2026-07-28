@@ -4,16 +4,18 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { openDb, type Database } from "../db/index.js";
 import { loadOrCreateKeypair, type Keypair } from "../crypto/tokens.js";
+import { loadOrCreateVapidKeys, type VapidKeys } from "../push/vapid.js";
 import * as q from "../db/queries.js";
 import { FailClosedError } from "../types.js";
 import { auditDetailOf, auditEventOf } from "../audit-detail.js";
 import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";
+import { registerPushRoutes } from "./routes.push.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-export interface AppContext { db: Database; kp: Keypair; }
+export interface AppContext { db: Database; kp: Keypair; vapid: VapidKeys; }
 
 export async function buildServer(
   opts: { dbPath?: string; keyDir?: string } = {},
@@ -25,6 +27,7 @@ export async function buildServer(
   app.ctx = {
     db: openDb(opts.dbPath ?? ":memory:"),
     kp: await loadOrCreateKeypair(opts.keyDir ?? join(process.cwd(), "keys")),
+    vapid: loadOrCreateVapidKeys(opts.keyDir ?? join(process.cwd(), "keys")),
   };
 
   await app.register(fastifyStatic, {
@@ -153,6 +156,7 @@ export async function buildServer(
   registerPrincipalRoutes(app);
   registerAttestationRoutes(app);
   registerVerifyRoutes(app);
+  registerPushRoutes(app);
 
   return app;
 }

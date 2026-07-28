@@ -42,7 +42,7 @@ function rejectInvalidToken(code: string, httpStatus: number, message: string, d
  * Mirrors beginRegistration's own rejection (unknown_principal, 404) so a bad
  * token is indistinguishable from a principal that doesn't exist at all.
  */
-function assertEnrolmentTokenValid(db: Database, principalId: string, token: unknown): void {
+export function assertEnrolmentTokenValid(db: Database, principalId: string, token: unknown): void {
   if (typeof token !== "string" || token.length === 0) {
     rejectInvalidToken("unknown_principal", 404, "unknown principal", "missing enrolment token");
   }
