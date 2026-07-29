@@ -1,5 +1,5 @@
 export const RP = {
   name: "Human-Attest",
-  id: "localhost",
-  origin: "http://localhost:3000",
+  id: process.env.RP_ID ?? "localhost",
+  origin: process.env.RP_ORIGIN ?? process.env.BASE_URL ?? "http://localhost:3000",
 } as const;
