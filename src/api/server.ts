@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import fastifyStatic from "@fastify/static";
+import fastifyRateLimit from "@fastify/rate-limit";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { openDb, type Database } from "../db/index.js";
@@ -49,6 +50,11 @@ export async function buildServer(
   app.get("/vendor/simplewebauthn-browser.js", (_req, reply) =>
     reply.sendFile("index.umd.min.js", join(here, "../../node_modules/@simplewebauthn/browser/dist/bundle")),
   );
+
+  await app.register(fastifyRateLimit, {
+    max: 100,
+    timeWindow: "1 minute",
+  });
 
   // A request with no body at all (no Content-Type, nothing on the wire)
   // leaves Fastify's req.body as the bare JS value `undefined` — not `{}`.

@@ -126,7 +126,9 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     };
   });
 
-  app.post("/v1/attestations/:id/options", async (req) => {
+  app.post("/v1/attestations/:id/options", {
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+  }, async (req) => {
     const { id } = req.params as { id: string };
     const body = req.body as { principal_id?: unknown; decision?: unknown };
     // The challenge is decision-specific, so the caller must declare up front

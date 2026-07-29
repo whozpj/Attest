@@ -83,7 +83,9 @@ function enrolmentTokenLooksUsable(db: Database, principalId: string, token: unk
 }
 
 export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext }): void {
-  app.post("/v1/principals", async (req, reply) => {
+  app.post("/v1/principals", {
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  }, async (req, reply) => {
     const body = req.body as { email?: unknown; display_name?: unknown };
     const email = body.email;
     const display_name = body.display_name;
