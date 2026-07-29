@@ -35,4 +35,28 @@ COPY tsconfig.json ./
 ENV NODE_ENV=production
 EXPOSE 3000
 
-CMD ["npx", "tsx", "src/main.ts"]
+# The app writes its DB and keys under /data (see docker-compose.yml's volume
+# mount) as the non-root `node` user below -- create it and hand over
+# ownership before dropping root, so that user can actually write there.
+# Also chown /app (the WORKDIR itself, not recursively -- existing files
+# under it stay root-owned and world-readable, which is all the app needs to
+# read its own source/node_modules): DB_PATH/KEY_DIR default to relative
+# paths under the CWD when unset, so a container run without those two env
+# vars explicitly set (e.g. a quick smoke test outside docker-compose's
+# managed /data volume) still needs to create human-attest.db and keys/
+# directly under /app as this non-root user.
+RUN mkdir -p /data && chown -R node:node /data && chown node:node /app
+USER node
+
+# No curl in this slim image -- use Node's own http client instead.
+# /healthz is exempt from rate limiting (src/api/routes.health.ts), so this
+# probe never risks tripping the same limit real traffic shares.
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD node -e "require('http').get('http://localhost:3000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+
+# Run the local tsx binary directly -- no npx/npm wrapper -- so this Node
+# process is PID 1 and receives SIGTERM/SIGINT directly instead of an
+# npm-exec/sh -c wrapper chain swallowing them (Finding 3, 2026-07-29 final
+# review: `docker kill --signal=TERM` never reached main.ts's SIGTERM
+# handler under the old `npx tsx` CMD).
+CMD ["node_modules/.bin/tsx", "src/main.ts"]

@@ -20,6 +20,7 @@ Read by `loadConfig` (`src/config.ts`) and the key-loading functions
 | `RP_ORIGIN`        | WebAuthn expected origin. Normally leave unset — it defaults to `APP_BASE_URL`. Only set separately if the RP ID's origin differs from the app's own base URL. | value of `APP_BASE_URL` |
 | `DB_PATH`          | Path to the SQLite database file.                                             | `human-attest.db` (relative to CWD) |
 | `KEY_DIR`          | Directory for on-disk key material (`signing-key.json`, `vapid-keys.json`) when the corresponding `*_JSON` env var isn't set. | `keys` (relative to CWD) |
+| `TRUST_PROXY`      | Set to `true` when deployed behind a single reverse proxy you control, so rate limiting (and any other IP-derived logic) keys on the real client's `X-Forwarded-For` address instead of the proxy's own. See §3's note below before enabling this. | `false` |
 | `SIGNING_KEY_JSON` | *Optional.* JSON blob `{"privateJwk": {...}, "publicJwk": {...}, "kid": "..."}` — injects the ES256 attestation-token signing keypair without touching disk. | unset (falls back to `KEY_DIR/signing-key.json`, generated on first boot) |
 | `VAPID_KEYS_JSON`  | *Optional.* JSON blob `{"publicKey": "...", "privateKey": "..."}` — injects the Web Push VAPID keypair without touching disk. | unset (falls back to `KEY_DIR/vapid-keys.json`, generated on first boot) |
 
@@ -131,6 +132,21 @@ Stated plainly, so it isn't discovered the hard way in an incident:
   itself. Put a real reverse proxy or load balancer in front of it (nginx,
   Caddy, an ALB/cloud load balancer, etc.) and point `APP_BASE_URL`/`RP_ID`
   at the domain that proxy serves.
+
+  **If you do put a reverse proxy in front, set `TRUST_PROXY=true`.**
+  `@fastify/rate-limit` keys on `req.ip`, which is the raw TCP peer address
+  unless Fastify's `trustProxy` option is on. Behind a reverse proxy, every
+  request's TCP peer is the proxy itself, so without `TRUST_PROXY=true` the
+  global 100/min limit (and `POST /v1/principals`'s 30/min) becomes a
+  whole-service budget shared by every real client, not a per-client one --
+  one abusive client trips it for everyone else. Setting `TRUST_PROXY=true`
+  makes Fastify key on the client's real address from `X-Forwarded-For`
+  instead. Leave it unset (`false`, the default) for a direct-to-internet
+  deployment with no proxy in front -- enabling it there would let any client
+  spoof `X-Forwarded-For` and bypass rate limiting entirely. This assumes
+  **exactly one** trusted proxy hop; it is not safe to enable if there are
+  multiple hops or any untrusted intermediary between the client and that one
+  proxy.
 - **Horizontal scaling.** Covered in §4 — a single SQLite file means a
   single writer, and this deployment is one app instance against one file.
 - **A compiled build step.** The app runs via `tsx` directly from
@@ -171,23 +187,25 @@ representative production hardware, and are not a substitute for load
 testing your actual deployment target.
 
 This app's own rate limits also shape what a run of this script can measure.
-`POST /v1/principals` has its own route-specific override, 10/minute
-(`src/api/routes.principals.ts`) — an already-shipped Task 3 protection
-against enrolment spam/enumeration. `scripts/load-test.mts` creates one
+`POST /v1/principals` has its own route-specific override, 30/minute
+(`src/api/routes.principals.ts`) — an already-shipped Task 4 protection
+against enrolment spam/enumeration (raised from an original 10/minute by
+Finding 4 of the 2026-07-29 final review, to give the e2e suite's own
+principal-creation count some headroom). `scripts/load-test.mts` creates one
 shared approver principal up front specifically so its own concurrent run
 never touches that endpoint again after the first call, and instead drives
 its load entirely at `POST /v1/attestations` and `GET
 /v1/attestations/:id`, neither of which has a route-specific override, so
 both fall under the global default registered in `src/api/server.ts`
 (`fastifyRateLimit`, `max: 100, timeWindow: "1 minute"`), applied
-cumulatively across every route without its own override. (The 30/minute
-limit that's easy to confuse this with is scoped specifically to `POST
-/v1/attestations/:id/options` — the WebAuthn ceremony-begin endpoint — which
-this script never calls.) Since the script makes 2 requests per attestation
-(1 POST + 1 GET), the real per-run ceiling under the global limit is
-roughly 100 / 2 ≈ **49 attestations per rolling minute**, not 30. Keep
-`total` comfortably under that per one-minute run, or space runs out across
-multiple windows to test higher totals.
+cumulatively across every route without its own override. (`POST
+/v1/attestations/:id/options` — the WebAuthn ceremony-begin endpoint — also
+happens to share that same 30/minute number today, coincidentally; it is a
+separate override and this script never calls it.) Since the script makes 2
+requests per attestation (1 POST + 1 GET), the real per-run ceiling under
+the global limit is roughly 100 / 2 ≈ **49 attestations per rolling
+minute**, not 30. Keep `total` comfortably under that per one-minute run, or
+space runs out across multiple windows to test higher totals.
 
 ## 7. Audit trail
 

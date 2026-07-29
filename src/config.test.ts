@@ -8,6 +8,7 @@ describe("loadConfig", () => {
       nodeEnv: "development", port: 3000, host: "127.0.0.1",
       baseUrl: "http://localhost:3000", rpId: "localhost",
       rpOrigin: "http://localhost:3000", dbPath: "human-attest.db", keyDir: "keys",
+      trustProxy: false,
     });
   });
 
@@ -16,13 +17,13 @@ describe("loadConfig", () => {
       NODE_ENV: "production", PORT: "8080", HOST: "0.0.0.0",
       APP_BASE_URL: "https://attest.example.com", RP_ID: "example.com",
       RP_ORIGIN: "https://attest.example.com", DB_PATH: "/data/attest.db",
-      KEY_DIR: "/secrets/keys",
+      KEY_DIR: "/secrets/keys", TRUST_PROXY: "true",
     });
     expect(config).toEqual({
       nodeEnv: "production", port: 8080, host: "0.0.0.0",
       baseUrl: "https://attest.example.com", rpId: "example.com",
       rpOrigin: "https://attest.example.com", dbPath: "/data/attest.db",
-      keyDir: "/secrets/keys",
+      keyDir: "/secrets/keys", trustProxy: true,
     });
   });
 
@@ -40,5 +41,10 @@ describe("loadConfig", () => {
     expect(() => loadConfig({
       NODE_ENV: "production", RP_ID: "example.com", APP_BASE_URL: "https://attest.example.com",
     })).not.toThrow();
+  });
+
+  it("enables trustProxy only when TRUST_PROXY=true", () => {
+    expect(loadConfig({ TRUST_PROXY: "true" }).trustProxy).toBe(true);
+    expect(loadConfig({}).trustProxy).toBe(false);
   });
 });

@@ -10,8 +10,8 @@
 // Usage: BASE=http://localhost:3000 npx tsx scripts/load-test.mts [concurrency] [total]
 //
 // Defaults (concurrency=10, total=25) are deliberately sized to fit inside
-// this server's own rate limits (Task 3). POST /v1/principals is
-// route-specifically capped at 10/minute (src/api/routes.principals.ts) --
+// this server's own rate limits (Task 4). POST /v1/principals is
+// route-specifically capped at 30/minute (src/api/routes.principals.ts) --
 // an earlier draft of this script created one throwaway principal per
 // attestation and defaulted to total=200, which immediately surfaced 429s
 // from that limit, producing a null approver_id and a 400 on attestation

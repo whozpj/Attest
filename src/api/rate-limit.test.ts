@@ -16,8 +16,11 @@ beforeEach(async () => {
 
 describe("rate limiting", () => {
   it("returns 429 after exceeding the principal-creation limit", async () => {
+    // Limit is 30/minute (Finding 4 of the 2026-07-29 final review raised it
+    // from 10 to give the e2e suite headroom) -- loop past it, not past the
+    // old 10.
     let lastStatus = 200;
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 35; i++) {
       const res = await app.inject({
         method: "POST", url: "/v1/principals",
         payload: { email: `rl-${i}@test.local`, display_name: `RL ${i}` },

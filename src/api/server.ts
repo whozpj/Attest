@@ -22,11 +22,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 export interface AppContext { db: Database; kp: Keypair; vapid: VapidKeys; baseUrl: string; }
 
 export async function buildServer(
-  opts: { dbPath?: string; keyDir?: string; baseUrl?: string; logger?: FastifyServerOptions["logger"] } = {},
+  opts: {
+    dbPath?: string; keyDir?: string; baseUrl?: string;
+    logger?: FastifyServerOptions["logger"]; trustProxy?: boolean;
+  } = {},
 ): Promise<FastifyInstance & { ctx: AppContext }> {
   // Two-step cast: Fastify's own instance type and our decorated type don't
   // sufficiently overlap for a direct assertion under this TS toolchain.
-  const app = Fastify({ logger: opts.logger ?? false }) as unknown as FastifyInstance & { ctx: AppContext };
+  // trustProxy defaults to false -- exactly today's behavior -- so
+  // @fastify/rate-limit keys on the raw TCP peer address unless the operator
+  // has explicitly opted in (see src/config.ts's TRUST_PROXY / Finding 2 of
+  // the 2026-07-29 final review).
+  const app = Fastify({
+    logger: opts.logger ?? false,
+    trustProxy: opts.trustProxy ?? false,
+  }) as unknown as FastifyInstance & { ctx: AppContext };
 
   app.ctx = {
     db: openDb(opts.dbPath ?? ":memory:"),
@@ -132,9 +142,17 @@ export async function buildServer(
     const auditEvent = isFailClosed ? auditEventOf(err) : undefined;
     const message = err instanceof Error ? err.message : String(err);
 
+    // A 429 from @fastify/rate-limit reaches this same handler (it's not a
+    // FailClosedError) and, before this, fell through to the generic
+    // "internal_error" event -- indistinguishable from a genuine unhandled
+    // exception in anything alerting on that event name. Rate limiting
+    // working as designed is not a fault; give it its own event.
+    const isRateLimited = !isFailClosed
+      && (err as { statusCode?: unknown }).statusCode === 429;
+
     q.audit(app.ctx.db, {
       attestation_id: attestationId,
-      event: auditEvent ?? (isFailClosed ? err.code : "internal_error"),
+      event: auditEvent ?? (isFailClosed ? err.code : isRateLimited ? "rate_limited" : "internal_error"),
       actor,
       detail: auditDetail ?? message,
     });

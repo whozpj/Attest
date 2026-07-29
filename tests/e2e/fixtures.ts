@@ -31,6 +31,9 @@ export async function createPrincipal(
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, display_name: email }),
   });
+  if (res.status !== 201) {
+    throw new Error(`createPrincipal failed: ${res.status} ${await res.text()}`);
+  }
   const body = await res.json();
   return { principalId: body.principal_id as string, enrolmentToken: body.enrolment_token as string };
 }

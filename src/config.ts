@@ -7,6 +7,7 @@ export interface AppConfig {
   rpOrigin: string;
   dbPath: string;
   keyDir: string;
+  trustProxy: boolean;
 }
 
 /**
@@ -36,6 +37,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     rpOrigin: env.RP_ORIGIN ?? baseUrl,
     dbPath: env.DB_PATH ?? "human-attest.db",
     keyDir: env.KEY_DIR ?? "keys",
+    // Off by default -- @fastify/rate-limit keys on req.ip, which Fastify
+    // only derives from X-Forwarded-For when trustProxy is enabled. Left
+    // false, a direct-to-internet deployment (also a valid, supported
+    // topology) can't have its rate limiting bypassed by a spoofed
+    // X-Forwarded-For header. Set TRUST_PROXY=true only when deploying
+    // behind exactly one reverse proxy you control (see docs/PRODUCTION.md).
+    trustProxy: env.TRUST_PROXY === "true",
   };
 
   if (config.nodeEnv === "production" &&

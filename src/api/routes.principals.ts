@@ -83,8 +83,13 @@ function enrolmentTokenLooksUsable(db: Database, principalId: string, token: unk
 }
 
 export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext }): void {
+  // max: 30 -- still tight enough to matter against real enrolment-token
+  // spam/enumeration, but with real headroom over the e2e suite's own count
+  // (tests/e2e's specs call createPrincipal exactly 10 times today; if a
+  // future spec addition pushes that count up, revisit this number rather
+  // than let the suite sit exactly at the limit again).
   app.post("/v1/principals", {
-    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
   }, async (req, reply) => {
     const body = req.body as { email?: unknown; display_name?: unknown };
     const email = body.email;
