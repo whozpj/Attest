@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { exportJWK } from "jose";
 import { loadOrCreateKeypair, signAttestation, verifyAttestation, publicJwks } from "./tokens.js";
 
 let kp: Awaited<ReturnType<typeof loadOrCreateKeypair>>;
@@ -64,5 +65,18 @@ describe("attestation tokens", () => {
     const a = await publicJwks(await loadOrCreateKeypair(dir));
     const b = await publicJwks(await loadOrCreateKeypair(dir));
     expect(a.keys[0]).toEqual(b.keys[0]);
+  });
+
+  it("loads a keypair from SIGNING_KEY_JSON when set, without touching disk", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ha-envkey-"));
+    const privateJwk = await exportJWK(kp.privateKey);
+    process.env.SIGNING_KEY_JSON = JSON.stringify({ privateJwk, publicJwk: kp.publicJwk, kid: kp.kid });
+    try {
+      const loaded = await loadOrCreateKeypair(dir);
+      expect(loaded.kid).toBe(kp.kid);
+      expect(existsSync(join(dir, "signing-key.json"))).toBe(false);
+    } finally {
+      delete process.env.SIGNING_KEY_JSON;
+    }
   });
 });

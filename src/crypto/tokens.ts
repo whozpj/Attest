@@ -15,6 +15,16 @@ export interface Keypair {
 const ALG = "ES256";
 
 export async function loadOrCreateKeypair(dir: string): Promise<Keypair> {
+  const envKey = process.env.SIGNING_KEY_JSON;
+  if (envKey) {
+    const stored = JSON.parse(envKey) as { privateJwk: JWK; publicJwk: JWK; kid: string };
+    return {
+      privateKey: (await importJWK(stored.privateJwk, ALG)) as CryptoKey,
+      publicJwk: stored.publicJwk,
+      kid: stored.kid,
+    };
+  }
+
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "signing-key.json");
 

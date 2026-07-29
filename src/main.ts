@@ -8,3 +8,12 @@ const app = await buildServer({
 });
 await app.listen({ port: config.port, host: config.host });
 console.log(`human-attest listening on ${config.baseUrl}`);
+
+async function shutdown(signal: string): Promise<void> {
+  app.log.info({ signal }, "shutting down");
+  await app.close();
+  app.ctx.db.close();
+  process.exit(0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

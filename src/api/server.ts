@@ -14,6 +14,7 @@ import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";
 import { registerPushRoutes } from "./routes.push.js";
+import { registerHealthRoutes } from "./routes.health.js";
 import { loadConfig } from "../config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -183,6 +184,7 @@ export async function buildServer(
   registerAttestationRoutes(app);
   registerVerifyRoutes(app);
   registerPushRoutes(app);
+  registerHealthRoutes(app);
 
   return app;
 }
