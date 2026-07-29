@@ -1,0 +1,49 @@
+name: HumanAttest
+options:
+  bundleIdPrefix: com.humanattest
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  HumanAttest:
+    type: application
+    platform: iOS
+    sources:
+      - path: HumanAttest
+    info:
+      path: HumanAttest/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSExceptionMinimumTLSVersion: TLSv1.0
+    entitlements:
+      path: HumanAttest/HumanAttest.entitlements
+      properties:
+        com.apple.developer.associated-domains:
+          # ?mode=developer is Apple's documented development-only suffix for
+          # testing associated-domain features (Universal Links, passkeys)
+          # against a domain that doesn't (and, for "localhost", structurally
+          # can't) serve a real hosted apple-app-site-association file. It is
+          # honored only for debug builds launched from Xcode/simctl, which
+          # matches this project's status: real Face ID passkey ceremonies
+          # against the real Human-Attest server, without needing a publicly
+          # reachable HTTPS "localhost".
+          - "webcredentials:localhost?mode=developer"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.humanattest.app
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        # No Apple Developer account is available in this build environment.
+        # Simulator builds don't require code signing at all, so this is
+        # disabled outright rather than left on "Automatic" (which would try,
+        # and fail, to find a signing identity/team).
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
