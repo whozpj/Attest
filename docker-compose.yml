@@ -1,0 +1,17 @@
+services:
+  human-attest:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL to your real https domain}
+      RP_ID: ${RP_ID:?set RP_ID to your real domain}
+      DB_PATH: /data/human-attest.db
+      KEY_DIR: /data/keys
+    volumes:
+      - human-attest-data:/data
+volumes:
+  human-attest-data:
