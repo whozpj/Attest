@@ -14,7 +14,7 @@ describe("loadConfig", () => {
   it("reads every value from the environment when set", () => {
     const config = loadConfig({
       NODE_ENV: "production", PORT: "8080", HOST: "0.0.0.0",
-      BASE_URL: "https://attest.example.com", RP_ID: "example.com",
+      APP_BASE_URL: "https://attest.example.com", RP_ID: "example.com",
       RP_ORIGIN: "https://attest.example.com", DB_PATH: "/data/attest.db",
       KEY_DIR: "/secrets/keys",
     });
@@ -27,7 +27,7 @@ describe("loadConfig", () => {
   });
 
   it("derives rpOrigin from baseUrl when RP_ORIGIN is not set", () => {
-    const config = loadConfig({ BASE_URL: "https://attest.example.com" });
+    const config = loadConfig({ APP_BASE_URL: "https://attest.example.com" });
     expect(config.rpOrigin).toBe("https://attest.example.com");
   });
 
@@ -36,9 +36,9 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ NODE_ENV: "production", RP_ID: "example.com" })).toThrow(/localhost/);
   });
 
-  it("allows production once both RP_ID and BASE_URL point at a real domain", () => {
+  it("allows production once both RP_ID and APP_BASE_URL point at a real domain", () => {
     expect(() => loadConfig({
-      NODE_ENV: "production", RP_ID: "example.com", BASE_URL: "https://attest.example.com",
+      NODE_ENV: "production", RP_ID: "example.com", APP_BASE_URL: "https://attest.example.com",
     })).not.toThrow();
   });
 });

@@ -58,7 +58,7 @@ Already implemented directly (not dispatched), matching this project's precedent
 
 **Produced, for later tasks to consume:**
 - `src/config.ts`: `interface AppConfig { nodeEnv, port, host, baseUrl, rpId, rpOrigin, dbPath, keyDir }` and `loadConfig(env?: NodeJS.ProcessEnv): AppConfig`, which throws if `nodeEnv === "production"` and `rpId`/`baseUrl` still point at `localhost`.
-- `src/webauthn/config.ts`'s `RP.id`/`RP.origin` now read `process.env.RP_ID`/`process.env.RP_ORIGIN`/`process.env.BASE_URL`, defaulting to the exact same `"localhost"`/`"http://localhost:3000"` as before when unset.
+- `src/webauthn/config.ts`'s `RP.id`/`RP.origin` now read `process.env.RP_ID`/`process.env.RP_ORIGIN`/`process.env.APP_BASE_URL`, defaulting to the exact same `"localhost"`/`"http://localhost:3000"` as before when unset.
 
 **Step 1 — `src/config.ts`:**
 
@@ -76,14 +76,14 @@ export interface AppConfig {
 
 /**
  * Fail closed on boot, not on the first request: a production deployment
- * still pointing RP_ID/BASE_URL at localhost would silently issue tokens
+ * still pointing RP_ID/APP_BASE_URL at localhost would silently issue tokens
  * whose WebAuthn origin/RP-ID checks can never match a real browser's real
  * origin -- every approval would fail, indistinguishably from a config typo
  * anywhere else. Refusing to start is louder and cheaper to debug.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = (env.NODE_ENV as AppConfig["nodeEnv"]) ?? "development";
-  const baseUrl = env.BASE_URL ?? "http://localhost:3000";
+  const baseUrl = env.APP_BASE_URL ?? "http://localhost:3000";
   const config: AppConfig = {
     nodeEnv,
     port: env.PORT ? Number(env.PORT) : 3000,
@@ -98,8 +98,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (config.nodeEnv === "production" &&
       (config.rpId === "localhost" || config.baseUrl.includes("localhost"))) {
     throw new Error(
-      "refusing to start with NODE_ENV=production while RP_ID/BASE_URL still " +
-      "point at localhost -- set RP_ID and BASE_URL to your real domain",
+      "refusing to start with NODE_ENV=production while RP_ID/APP_BASE_URL still " +
+      "point at localhost -- set RP_ID and APP_BASE_URL to your real domain",
     );
   }
 
@@ -126,7 +126,7 @@ describe("loadConfig", () => {
   it("reads every value from the environment when set", () => {
     const config = loadConfig({
       NODE_ENV: "production", PORT: "8080", HOST: "0.0.0.0",
-      BASE_URL: "https://attest.example.com", RP_ID: "example.com",
+      APP_BASE_URL: "https://attest.example.com", RP_ID: "example.com",
       RP_ORIGIN: "https://attest.example.com", DB_PATH: "/data/attest.db",
       KEY_DIR: "/secrets/keys",
     });
@@ -139,7 +139,7 @@ describe("loadConfig", () => {
   });
 
   it("derives rpOrigin from baseUrl when RP_ORIGIN is not set", () => {
-    const config = loadConfig({ BASE_URL: "https://attest.example.com" });
+    const config = loadConfig({ APP_BASE_URL: "https://attest.example.com" });
     expect(config.rpOrigin).toBe("https://attest.example.com");
   });
 
@@ -148,9 +148,9 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ NODE_ENV: "production", RP_ID: "example.com" })).toThrow(/localhost/);
   });
 
-  it("allows production once both RP_ID and BASE_URL point at a real domain", () => {
+  it("allows production once both RP_ID and APP_BASE_URL point at a real domain", () => {
     expect(() => loadConfig({
-      NODE_ENV: "production", RP_ID: "example.com", BASE_URL: "https://attest.example.com",
+      NODE_ENV: "production", RP_ID: "example.com", APP_BASE_URL: "https://attest.example.com",
     })).not.toThrow();
   });
 });
@@ -162,7 +162,7 @@ describe("loadConfig", () => {
 export const RP = {
   name: "Human-Attest",
   id: process.env.RP_ID ?? "localhost",
-  origin: process.env.RP_ORIGIN ?? process.env.BASE_URL ?? "http://localhost:3000",
+  origin: process.env.RP_ORIGIN ?? process.env.APP_BASE_URL ?? "http://localhost:3000",
 } as const;
 ```
 
@@ -171,6 +171,8 @@ Run: `npx tsc --noEmit && npx vitest run` — expect clean, zero regressions (th
 ---
 
 ## Task 2: thread config through the server (replace hardcoded `localhost:3000`)
+
+**⚠️ Note on the env var name:** this section (and Task 1's, above) now reads `APP_BASE_URL` throughout. The implementer's own run of this task discovered that the originally-planned name, bare `BASE_URL`, collides with a name Vite reserves and Vitest copies onto `process.env` before every test file runs (confirmed by direct probe: it resolves to `"/"` under `npx vitest run`, not this app's own default) — invisible in production and in the e2e suite (both plain node/tsx processes with no Vite involved), but a real, silent landmine for any vitest-run test relying on `loadConfig()`'s default. Renamed at the root (Tasks 1 and 2's already-committed code, and every later task's references) rather than patching around the collision in each affected test file.
 
 **Files:**
 - Modify: `src/api/server.ts`, `src/main.ts`, `src/api/routes.attestations.ts`
@@ -1031,7 +1033,7 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOST: "0.0.0.0"
-      BASE_URL: ${BASE_URL:?set BASE_URL to your real https domain}
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL to your real https domain}
       RP_ID: ${RP_ID:?set RP_ID to your real domain}
       DB_PATH: /data/human-attest.db
       KEY_DIR: /data/keys
@@ -1041,7 +1043,7 @@ volumes:
   human-attest-data:
 ```
 
-`${VAR:?message}` makes `docker compose up` fail loudly if `BASE_URL`/`RP_ID` aren't set, rather than silently booting misconfigured — matching `loadConfig`'s own fail-closed check from Task 1 (which would independently refuse to start anyway, but failing at the compose layer gives a clearer message).
+`${VAR:?message}` makes `docker compose up` fail loudly if `APP_BASE_URL`/`RP_ID` aren't set, rather than silently booting misconfigured — matching `loadConfig`'s own fail-closed check from Task 1 (which would independently refuse to start anyway, but failing at the compose layer gives a clearer message).
 
 - [ ] **Step 5: Build and actually run it — this step is not optional**
 
@@ -1049,7 +1051,7 @@ volumes:
 docker build -t human-attest-demo .
 docker run -d --name ha-verify -p 3001:3000 \
   -e NODE_ENV=production -e PORT=3000 -e HOST=0.0.0.0 \
-  -e BASE_URL=https://attest.verify.test -e RP_ID=attest.verify.test \
+  -e APP_BASE_URL=https://attest.verify.test -e RP_ID=attest.verify.test \
   human-attest-demo
 sleep 3
 curl -sf http://localhost:3001/healthz && echo " -- healthz OK"
@@ -1250,11 +1252,11 @@ Paste the real printed numbers into your report. If any request in the run throw
 - [ ] **Step 3: `docs/PRODUCTION.md`**
 
 Write a deployment doc covering, in this order:
-1. **Required environment variables** — a table of every var `loadConfig` (Task 1) and the key-loading functions (Task 6) read: `NODE_ENV`, `PORT`, `HOST`, `BASE_URL`, `RP_ID`, `RP_ORIGIN`, `DB_PATH`, `KEY_DIR`, `SIGNING_KEY_JSON` (optional), `VAPID_KEYS_JSON` (optional) — what each does, and its default.
+1. **Required environment variables** — a table of every var `loadConfig` (Task 1) and the key-loading functions (Task 6) read: `NODE_ENV`, `PORT`, `HOST`, `APP_BASE_URL`, `RP_ID`, `RP_ORIGIN`, `DB_PATH`, `KEY_DIR`, `SIGNING_KEY_JSON` (optional), `VAPID_KEYS_JSON` (optional) — what each does, and its default.
 2. **Secrets** — two supported patterns: on-disk files under `KEY_DIR` (the default, fine for a single trusted host) or `SIGNING_KEY_JSON`/`VAPID_KEYS_JSON` env vars (the portable pattern for injecting from AWS Secrets Manager, Vault, or Kubernetes Secrets — all of which can ultimately expose a secret as an environment variable, which is why this plan didn't build a cloud-provider-specific SDK integration).
-3. **Running it** — `docker compose up` with `BASE_URL`/`RP_ID` set, referencing Task 8's `docker-compose.yml`.
+3. **Running it** — `docker compose up` with `APP_BASE_URL`/`RP_ID` set, referencing Task 8's `docker-compose.yml`.
 4. **Data durability** — SQLite with WAL mode (already the schema's `PRAGMA journal_mode = WAL`) survives process crashes, but this is a **single-instance deployment**: SQLite is single-writer, there is no built-in replication, and the Docker volume is the only copy. Recommend a periodic file-level backup of `DB_PATH` at minimum, and name Litestream (continuous SQLite replication to object storage) as the standard tool for this if durability beyond "single host, single disk" is required. State plainly that migrating to a client-server database (Postgres) is the natural next step if this needs to run as more than one instance, and that this plan deliberately did not do that migration (out of scope — a storage-engine change is a materially different, riskier undertaking than the hardening covered here).
-5. **What this deployment does NOT include**, stated plainly: TLS termination (put a real reverse proxy or load balancer in front — this app expects to be reached over HTTPS at `BASE_URL`, but doesn't terminate TLS itself), horizontal scaling (single SQLite file), a compiled build step (runs via `tsx`, see Task 8's Dockerfile), and any cloud-provider-specific secrets integration (only the portable env-var injection point from Task 6).
+5. **What this deployment does NOT include**, stated plainly: TLS termination (put a real reverse proxy or load balancer in front — this app expects to be reached over HTTPS at `APP_BASE_URL`, but doesn't terminate TLS itself), horizontal scaling (single SQLite file), a compiled build step (runs via `tsx`, see Task 8's Dockerfile), and any cloud-provider-specific secrets integration (only the portable env-var injection point from Task 6).
 6. **Load characteristics** — the real numbers from Step 2's run, with a one-line caveat that these were measured on a shared development machine, not representative production hardware.
 7. **Audit trail** — how to run `scripts/export-audit-log.mts` against the deployed DB file to get the full audit trail as newline-delimited JSON, and why it's a local script requiring filesystem access rather than an HTTP endpoint (Step 0's rationale).
 

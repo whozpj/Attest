@@ -7,19 +7,6 @@ import { randomUUID } from "node:crypto";
 import { buildServer } from "./server.js";
 import { makeFakeCredential, signAssertion } from "../../tests/security/lib/webauthn-fake.js";
 
-// Vitest's own Vite integration copies Vite's reserved `BASE_URL` env var
-// (the resolved app base path, "/") onto process.env before any test file
-// runs (via `process.env[name] ??= envs[name]` in configResolved) — purely
-// so `import.meta.env.BASE_URL` reassignment works elsewhere. That collides
-// with config.ts's unrelated `BASE_URL` env var: buildServer()'s default
-// baseUrl (no explicit opts.baseUrl) reads process.env.BASE_URL via
-// loadConfig(), so under vitest it would silently resolve to "/" instead of
-// falling through to config.ts's real http://localhost:3000 default. This
-// never affects production (main.ts) or the e2e server (tests/e2e/server.ts),
-// both plain node/tsx processes with no Vite involved — only this test file,
-// since it's the first place a bare loadConfig() actually runs inside vitest.
-delete process.env.BASE_URL;
-
 let app: Awaited<ReturnType<typeof buildServer>>;
 
 const wire = {
