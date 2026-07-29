@@ -10,20 +10,26 @@
 // Usage: BASE=http://localhost:3000 npx tsx scripts/load-test.mts [concurrency] [total]
 //
 // Defaults (concurrency=10, total=25) are deliberately sized to fit inside
-// this server's own per-route rate limits (Task 3): POST /v1/principals is
-// capped at 10/minute and POST /v1/attestations at 30/minute
-// (src/api/routes.principals.ts, src/api/routes.attestations.ts). An
-// earlier draft of this script created one throwaway principal per
-// attestation and defaulted to total=200 -- running it for real against the
-// live server immediately surfaced 429s from the principal-creation limit,
-// which then produced a null approver_id and a 400 on attestation creation.
-// That's the rate limiter (an intentional, already-shipped protection
-// against enrolment spam/enumeration) doing its job, not something this
-// probe should route around -- so the fix is to create exactly one shared
-// approver principal up front, outside the timed loop, and drive the
-// concurrent load entirely at POST /v1/attestations, which is what this
-// probe actually intends to measure. Raise `total` past ~30 only alongside
-// a longer wall-clock run (the limit is per rolling minute, not per run).
+// this server's own rate limits (Task 3). POST /v1/principals is
+// route-specifically capped at 10/minute (src/api/routes.principals.ts) --
+// an earlier draft of this script created one throwaway principal per
+// attestation and defaulted to total=200, which immediately surfaced 429s
+// from that limit, producing a null approver_id and a 400 on attestation
+// creation. That's the rate limiter (an intentional, already-shipped
+// protection against enrolment spam/enumeration) doing its job, not
+// something this probe should route around -- so the fix is to create
+// exactly one shared approver principal up front, outside the timed loop,
+// and drive the concurrent load entirely at POST /v1/attestations + GET
+// /v1/attestations/:id, neither of which has its own override. Those two
+// fall under the global default of 100/minute registered in
+// src/api/server.ts (`fastifyRateLimit`), applied cumulatively across every
+// route without its own override -- NOT the 30/minute limit, which is
+// scoped specifically to POST /v1/attestations/:id/options (the WebAuthn
+// ceremony-begin endpoint; this script never calls it). Since this script
+// makes 2 requests per attestation (1 POST + 1 GET), the real per-run
+// ceiling is roughly 100/2 = ~49 attestations, not ~30. Raise `total` past
+// that only alongside a longer wall-clock run (the limit is per rolling
+// minute, not per run).
 
 const BASE = process.env.BASE ?? "http://localhost:3000";
 const CONCURRENCY = Number(process.argv[2] ?? 10);

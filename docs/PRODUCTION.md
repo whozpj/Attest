@@ -170,19 +170,24 @@ independently read back:
 representative production hardware, and are not a substitute for load
 testing your actual deployment target.
 
-Two of this app's own endpoints are also rate-limited (`src/api/
-routes.principals.ts`, `src/api/routes.attestations.ts`, on top of a global
-100/minute default registered in `src/api/server.ts`): `POST /v1/principals`
-at 10/minute and `POST /v1/attestations` at 30/minute, both keyed per client.
-That's the practical throughput ceiling for a single client identity by
-design (abuse/enumeration protection, not a performance limit) — worth
-knowing before assuming a load test's low numbers indicate a performance
-problem rather than the rate limiter doing its job. `scripts/load-test.mts`
-creates one shared approver principal up front specifically so its own
-concurrent run exercises `POST /v1/attestations` without tripping the
-principal-creation limit; keep `total` under ~30 per one-minute run for the
-same reason, or space out runs across multiple windows to test higher
-totals.
+This app's own rate limits also shape what a run of this script can measure.
+`POST /v1/principals` has its own route-specific override, 10/minute
+(`src/api/routes.principals.ts`) — an already-shipped Task 3 protection
+against enrolment spam/enumeration. `scripts/load-test.mts` creates one
+shared approver principal up front specifically so its own concurrent run
+never touches that endpoint again after the first call, and instead drives
+its load entirely at `POST /v1/attestations` and `GET
+/v1/attestations/:id`, neither of which has a route-specific override, so
+both fall under the global default registered in `src/api/server.ts`
+(`fastifyRateLimit`, `max: 100, timeWindow: "1 minute"`), applied
+cumulatively across every route without its own override. (The 30/minute
+limit that's easy to confuse this with is scoped specifically to `POST
+/v1/attestations/:id/options` — the WebAuthn ceremony-begin endpoint — which
+this script never calls.) Since the script makes 2 requests per attestation
+(1 POST + 1 GET), the real per-run ceiling under the global limit is
+roughly 100 / 2 ≈ **49 attestations per rolling minute**, not 30. Keep
+`total` comfortably under that per one-minute run, or space runs out across
+multiple windows to test higher totals.
 
 ## 7. Audit trail
 
