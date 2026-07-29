@@ -79,4 +79,23 @@ describe("attestation tokens", () => {
       delete process.env.SIGNING_KEY_JSON;
     }
   });
+
+  it("verifies a token by matching its kid against the JWKS, not just the first entry", async () => {
+    const other = await loadOrCreateKeypair(mkdtempSync(join(tmpdir(), "ha-rotate-other-")));
+    const token = await signAttestation(kp, {
+      jti: "att_1", sub: "prin_1", act: "sha256:abc", approvers: ["prin_1"], mth: "passkey",
+    }, 300);
+    // A rotated JWKS where the token's real signing key is NOT at index 0.
+    const result = await verifyAttestation({ keys: [other.publicJwk, kp.publicJwk] }, token);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects a token whose kid matches no key in the JWKS", async () => {
+    const other = await loadOrCreateKeypair(mkdtempSync(join(tmpdir(), "ha-rotate-missing-")));
+    const token = await signAttestation(kp, {
+      jti: "att_1", sub: "prin_1", act: "sha256:abc", approvers: ["prin_1"], mth: "passkey",
+    }, 300);
+    const result = await verifyAttestation({ keys: [other.publicJwk] }, token);
+    expect(result.valid).toBe(false);
+  });
 });

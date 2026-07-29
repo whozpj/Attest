@@ -82,7 +82,12 @@ export async function verifyAttestation(
   jwks: { keys: JWK[] }, token: string,
 ): Promise<VerifyResult> {
   try {
-    const key = (await importJWK(jwks.keys[0], ALG)) as CryptoKey;
+    const [headerB64] = token.split(".");
+    const header = JSON.parse(Buffer.from(headerB64, "base64url").toString()) as { kid?: string };
+    const jwk = header.kid ? jwks.keys.find((k) => k.kid === header.kid) : jwks.keys[0];
+    if (!jwk) return { valid: false, reason: "signature_invalid" };
+
+    const key = (await importJWK(jwk, ALG)) as CryptoKey;
     const { payload } = await jwtVerify(token, key, { algorithms: [ALG] });
     return {
       valid: true,

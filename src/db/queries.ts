@@ -191,6 +191,22 @@ export function deleteCredential(db: Database, credentialId: string): void {
  * re-subscribing with the same still-cached service-worker registration) —
  * so this rebinds it rather than throwing, taking whichever principal_id
  * last proved token possession for that endpoint.
+ *
+ * Accepted tradeoff (production-hardening review, 2026-07-29): because
+ * `endpoint` is globally unique rather than scoped per-principal, a second
+ * principal who already knows a first principal's real endpoint URL could
+ * re-register it to themselves, silently unsubscribing the original owner.
+ * In practice this requires already knowing a high-entropy, server-generated
+ * value that is never exposed to any other principal or caller -- reachable
+ * only via database access or intercepting the original subscribe call, at
+ * which point far worse is already possible. Impact is bounded to
+ * denial-of-notification (a push message encrypted for the wrong browser's
+ * keys can't be read by anyone), never disclosure, on a best-effort channel.
+ * Scoping the constraint to (principal_id, endpoint) instead was considered
+ * and rejected: it would let two principals coexist on one real browser
+ * subscription, which cannot happen in practice (one browser, one
+ * subscription, one owner) and would just mask the same re-registration
+ * behavior under a different key.
  */
 export function upsertPushSubscription(
   db: Database,

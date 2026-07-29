@@ -35,12 +35,12 @@
     // user sees the permission prompt and just walks away without clicking
     // it, those promises never resolve or reject, and the existing
     // .catch(() => {}) below only handles rejection, not a stall. Race it
-    // against a 5s timer so it can never block the WebAuthn ceremony that
+    // against a 15s timer so it can never block the WebAuthn ceremony that
     // follows indefinitely; a real permission-prompt decision is fast, this
     // only guards the pathological "never decided" case.
     await Promise.race([
       subscribeToPush(),
-      new Promise((resolve) => setTimeout(resolve, 5000)),
+      new Promise((resolve) => setTimeout(resolve, 15000)),
     ]).catch(() => {});
     const optionsJSON = await fetch(`/v1/principals/${principalId}/credentials/options?token=${token}`, {
       method: "POST",
