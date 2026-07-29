@@ -12,13 +12,14 @@ import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";
 import { registerPushRoutes } from "./routes.push.js";
+import { loadConfig } from "../config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-export interface AppContext { db: Database; kp: Keypair; vapid: VapidKeys; }
+export interface AppContext { db: Database; kp: Keypair; vapid: VapidKeys; baseUrl: string; }
 
 export async function buildServer(
-  opts: { dbPath?: string; keyDir?: string } = {},
+  opts: { dbPath?: string; keyDir?: string; baseUrl?: string } = {},
 ): Promise<FastifyInstance & { ctx: AppContext }> {
   // Two-step cast: Fastify's own instance type and our decorated type don't
   // sufficiently overlap for a direct assertion under this TS toolchain.
@@ -28,6 +29,7 @@ export async function buildServer(
     db: openDb(opts.dbPath ?? ":memory:"),
     kp: await loadOrCreateKeypair(opts.keyDir ?? join(process.cwd(), "keys")),
     vapid: loadOrCreateVapidKeys(opts.keyDir ?? join(process.cwd(), "keys")),
+    baseUrl: opts.baseUrl ?? loadConfig().baseUrl,
   };
 
   await app.register(fastifyStatic, {

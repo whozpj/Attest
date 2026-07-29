@@ -7,6 +7,19 @@ import { randomUUID } from "node:crypto";
 import { buildServer } from "./server.js";
 import { makeFakeCredential, signAssertion } from "../../tests/security/lib/webauthn-fake.js";
 
+// Vitest's own Vite integration copies Vite's reserved `BASE_URL` env var
+// (the resolved app base path, "/") onto process.env before any test file
+// runs (via `process.env[name] ??= envs[name]` in configResolved) — purely
+// so `import.meta.env.BASE_URL` reassignment works elsewhere. That collides
+// with config.ts's unrelated `BASE_URL` env var: buildServer()'s default
+// baseUrl (no explicit opts.baseUrl) reads process.env.BASE_URL via
+// loadConfig(), so under vitest it would silently resolve to "/" instead of
+// falling through to config.ts's real http://localhost:3000 default. This
+// never affects production (main.ts) or the e2e server (tests/e2e/server.ts),
+// both plain node/tsx processes with no Vite involved — only this test file,
+// since it's the first place a bare loadConfig() actually runs inside vitest.
+delete process.env.BASE_URL;
+
 let app: Awaited<ReturnType<typeof buildServer>>;
 
 const wire = {
@@ -412,5 +425,34 @@ describe("POST /v1/attestations sends a push to every approver with a registered
       payload: { requested_by: "int", approver_ids: [principal_id], action: wire },
     });
     expect(res.statusCode).toBe(201);
+  });
+});
+
+describe("POST /v1/attestations builds URLs from the server's configured baseUrl", () => {
+  it("uses the configured baseUrl, not a hardcoded host", async () => {
+    const customApp = await buildServer({
+      dbPath: ":memory:", keyDir: mkdtempSync(join(tmpdir(), "ha-baseurl-")),
+      baseUrl: "https://attest.example.com",
+    });
+    const principalRes = await customApp.inject({
+      method: "POST", url: "/v1/principals",
+      payload: { email: "baseurl@test.local", display_name: "Base URL" },
+    });
+    const { principal_id } = principalRes.json();
+    const res = await customApp.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: { requested_by: "int", approver_ids: [principal_id], action: wire },
+    });
+    expect(res.json().approve_url).toBe(
+      `https://attest.example.com/approve/index.html?attestation=${res.json().attestation_id}`,
+    );
+  });
+
+  it("still defaults to http://localhost:3000 when no baseUrl is passed", async () => {
+    const res = await app.inject({
+      method: "POST", url: "/v1/attestations",
+      payload: { requested_by: "int", approver_ids: ["prin_whatever"], action: wire },
+    });
+    expect(res.json().approve_url).toContain("http://localhost:3000/approve/index.html");
   });
 });

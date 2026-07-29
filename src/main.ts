@@ -1,5 +1,9 @@
 import { buildServer } from "./api/server.js";
+import { loadConfig } from "./config.js";
 
-const app = await buildServer({ dbPath: "human-attest.db", keyDir: "keys" });
-await app.listen({ port: 3000, host: "127.0.0.1" });
-console.log("human-attest listening on http://localhost:3000");
+const config = loadConfig();
+const app = await buildServer({
+  dbPath: config.dbPath, keyDir: config.keyDir, baseUrl: config.baseUrl,
+});
+await app.listen({ port: config.port, host: config.host });
+console.log(`human-attest listening on ${config.baseUrl}`);

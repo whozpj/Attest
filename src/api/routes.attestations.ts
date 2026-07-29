@@ -91,7 +91,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
     void notifyApprovers(db, app.ctx.vapid, envelope.approver_ids, {
       attestation_id: attestationId,
       headline: action.summary.headline,
-      approveUrlBase: `http://localhost:3000/approve/app.html?attestation=${attestationId}`,
+      approveUrlBase: `${app.ctx.baseUrl}/approve/app.html?attestation=${attestationId}`,
     });
 
     return reply.status(201).send({
@@ -99,7 +99,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
       status: "pending",
       payload_hash: action.payload_hash,
       summary: action.summary,
-      approve_url: `http://localhost:3000/approve/index.html?attestation=${attestationId}`,
+      approve_url: `${app.ctx.baseUrl}/approve/index.html?attestation=${attestationId}`,
     });
   });
 
