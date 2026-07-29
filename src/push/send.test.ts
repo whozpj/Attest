@@ -125,4 +125,31 @@ describe("notifyApprovers", () => {
       approveUrlBase: "http://x/approve/app.html?attestation=att_1",
     })).resolves.toBeUndefined();
   });
+
+  it("calls the logger with details when a send fails", async () => {
+    q.upsertPushSubscription(db, {
+      id: "psub_1", principal_id: "prin_1",
+      endpoint: "https://push.example/fails", p256dh: "k", auth: "s",
+    });
+    sendNotification.mockRejectedValueOnce(Object.assign(new Error("gone"), { statusCode: 410 }));
+    const warn = vi.fn();
+    await notifyApprovers(db, vapid, ["prin_1"], {
+      attestation_id: "att_1", headline: "x", approveUrlBase: "http://x/approve/app.html?attestation=att_1",
+    }, { warn });
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ principal_id: "prin_1", endpoint: "https://push.example/fails", status_code: 410 }),
+      "push send failed",
+    );
+  });
+
+  it("works with no logger passed (logger is optional)", async () => {
+    q.upsertPushSubscription(db, {
+      id: "psub_1", principal_id: "prin_1",
+      endpoint: "https://push.example/nologger", p256dh: "k", auth: "s",
+    });
+    sendNotification.mockRejectedValueOnce(new Error("boom"));
+    await expect(notifyApprovers(db, vapid, ["prin_1"], {
+      attestation_id: "att_1", headline: "x", approveUrlBase: "http://x/approve/app.html?attestation=att_1",
+    })).resolves.toBeUndefined();
+  });
 });

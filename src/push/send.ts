@@ -11,6 +11,10 @@ export interface PushNotice {
   approveUrlBase: string;
 }
 
+export interface SendLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
 /**
  * Best-effort push delivery. A push notification is a convenience nudge —
  * the approve_url is independently reachable regardless of whether any
@@ -20,7 +24,7 @@ export interface PushNotice {
  * failing must not stop the others, and this function itself never throws.
  */
 export async function notifyApprovers(
-  db: Database, vapid: VapidKeys, approverIds: string[], notice: PushNotice,
+  db: Database, vapid: VapidKeys, approverIds: string[], notice: PushNotice, logger?: SendLogger,
 ): Promise<void> {
   for (const principalId of approverIds) {
     try {
@@ -49,11 +53,14 @@ export async function notifyApprovers(
           if (statusCode === 404 || statusCode === 410) {
             q.deletePushSubscription(db, sub.endpoint);
           }
+          logger?.warn(
+            { principal_id: principalId, endpoint: sub.endpoint, status_code: statusCode ?? null },
+            "push send failed",
+          );
         }
       }
     } catch (err) {
-      // Silently swallow any error (database errors, message encoding, etc.)
-      // from processing this principal so we can try the next one.
+      logger?.warn({ principal_id: principalId, err: String(err) }, "push notification processing failed");
     }
   }
 }

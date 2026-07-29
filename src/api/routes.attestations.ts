@@ -92,7 +92,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
       attestation_id: attestationId,
       headline: action.summary.headline,
       approveUrlBase: `${app.ctx.baseUrl}/approve/app.html?attestation=${attestationId}`,
-    });
+    }, app.log);
 
     return reply.status(201).send({
       attestation_id: attestationId,

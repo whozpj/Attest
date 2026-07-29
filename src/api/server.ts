@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -19,11 +19,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 export interface AppContext { db: Database; kp: Keypair; vapid: VapidKeys; baseUrl: string; }
 
 export async function buildServer(
-  opts: { dbPath?: string; keyDir?: string; baseUrl?: string } = {},
+  opts: { dbPath?: string; keyDir?: string; baseUrl?: string; logger?: FastifyServerOptions["logger"] } = {},
 ): Promise<FastifyInstance & { ctx: AppContext }> {
   // Two-step cast: Fastify's own instance type and our decorated type don't
   // sufficiently overlap for a direct assertion under this TS toolchain.
-  const app = Fastify({ logger: false }) as unknown as FastifyInstance & { ctx: AppContext };
+  const app = Fastify({ logger: opts.logger ?? false }) as unknown as FastifyInstance & { ctx: AppContext };
 
   app.ctx = {
     db: openDb(opts.dbPath ?? ":memory:"),
