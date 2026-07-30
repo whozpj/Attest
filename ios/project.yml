@@ -21,29 +21,59 @@ targets:
           NSExceptionDomains:
             localhost:
               NSExceptionAllowsInsecureHTTPLoads: true
-              NSExceptionMinimumTLSVersion: TLSv1.0
+              NSExceptionMinimumTLSVersion: TLSv1.2
     entitlements:
       path: HumanAttest/HumanAttest.entitlements
       properties:
         com.apple.developer.associated-domains:
-          # ?mode=developer is Apple's documented development-only suffix for
-          # testing associated-domain features (Universal Links, passkeys)
-          # against a domain that doesn't (and, for "localhost", structurally
-          # can't) serve a real hosted apple-app-site-association file. It is
-          # honored only for debug builds launched from Xcode/simctl, which
-          # matches this project's status: real Face ID passkey ceremonies
-          # against the real Human-Attest server, without needing a publicly
-          # reachable HTTPS "localhost".
+          # Confirmed by direct testing (2026-07-29), not assumption:
+          # ASAuthorizationPlatformPublicKeyCredentialProvider has NO
+          # built-in leniency for "localhost" the way browsers do -- without
+          # this entitlement present at all, registration fails at runtime
+          # with "Application ... is not associated with domain localhost."
+          # WITH it present, Xcode refuses to provision at all on a
+          # Personal (free) development team: "Personal development teams
+          # ... do not support the Associated Domains capability" -- a real,
+          # exact error, not a guess. ?mode=developer does not change this;
+          # it only skips needing a *hosted* apple-app-site-association
+          # file, not the underlying paid-account gate on the capability
+          # itself. This entitlement is correct and necessary for whenever
+          # a paid Apple Developer Program membership is added to the
+          # project's signing team -- until then, the app builds and
+          # installs, but this specific ceremony cannot complete.
           - "webcredentials:localhost?mode=developer"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.humanattest.app
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
-        # No Apple Developer account is available in this build environment.
-        # Simulator builds don't require code signing at all, so this is
-        # disabled outright rather than left on "Automatic" (which would try,
-        # and fail, to find a signing identity/team).
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGN_IDENTITY: ""
+        # Real Face ID passkey ceremonies (ASAuthorizationPlatformPublicKey-
+        # CredentialProvider) turned out to need SOME application identifier
+        # even for Simulator/developer-mode associated domains -- fully
+        # disabled signing produced a real runtime error ("the calling
+        # process does not have an application identifier"). Automatic
+        # signing lets Xcode use its "Sign to Run Locally" local identity,
+        # which doesn't require a paid (or even signed-in) Apple Developer
+        # account.
+        CODE_SIGN_STYLE: Automatic
+
+  HumanAttestUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HumanAttestUITests
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: HumanAttest
+schemes:
+  HumanAttest:
+    build:
+      targets:
+        HumanAttest: all
+        HumanAttestUITests: [test]
+    test:
+      targets:
+        - HumanAttestUITests

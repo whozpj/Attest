@@ -7,8 +7,22 @@ import SwiftUI
 /// without a publicly hosted apple-app-site-association file.
 let relyingPartyID = "localhost"
 
+/// `principals.email` is UNIQUE server-side, and the server deliberately
+/// reports a duplicate email with the exact same opaque `principal_invalid`
+/// message it uses for a malformed body (routes.principals.ts —
+/// anti-enumeration: a distinct duplicate-email error would let a caller
+/// probe for which emails are already registered). Observed for real: a
+/// hardcoded default email collides with itself on a second enrol attempt,
+/// surfacing as an unhelpful "email and display_name are required" even
+/// though both were filled in. A fresh suffix per launch avoids the
+/// collision without needing to explain the server's own anti-enumeration
+/// design in the UI.
+private func freshDemoEmail() -> String {
+    "cfo-\(Int(Date().timeIntervalSince1970))@acme-demo.test"
+}
+
 struct EnrollView: View {
-    @State private var email = "cfo@acme-demo.test"
+    @State private var email = freshDemoEmail()
     @State private var displayName = "Amara Chen, CFO"
     @State private var status = "Not enrolled"
     @State private var principalId: String?
@@ -37,10 +51,12 @@ struct EnrollView: View {
                         }
                     }
                     .disabled(isWorking)
+                    .accessibilityIdentifier("enrolButton")
                 }
                 Section("Status") {
                     Text(status)
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("statusText")
                     if let principalId {
                         Text(principalId)
                             .font(.caption)
