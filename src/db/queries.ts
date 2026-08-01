@@ -85,7 +85,8 @@ export function insertAttestation(
 export function getAttestation(db: Database, id: string) {
   const row = db.prepare(`SELECT * FROM attestations WHERE id = ?`).get(id) as
     | { id: string; action_id: string; status: AttestationStatus; required_approvals: number;
-        approver_ids: string; expires_at: string; resolved_at: string | null; token: string | null }
+        approver_ids: string; expires_at: string; created_at: string;
+        resolved_at: string | null; token: string | null }
     | undefined;
   return row ? { ...row, approver_ids: JSON.parse(row.approver_ids) as string[] } : undefined;
 }
@@ -182,60 +183,6 @@ export function consumeEnrolmentToken(db: Database, token: string, principalId: 
  */
 export function deleteCredential(db: Database, credentialId: string): void {
   db.prepare(`DELETE FROM credentials WHERE credential_id = ?`).run(credentialId);
-}
-
-/**
- * `endpoint` is UNIQUE per push_subscriptions. A conflict means the same
- * browser subscription is being re-registered — legitimately reachable if a
- * principal re-opens enrol.html (e.g. after clearing site data and
- * re-subscribing with the same still-cached service-worker registration) —
- * so this rebinds it rather than throwing, taking whichever principal_id
- * last proved token possession for that endpoint.
- *
- * Accepted tradeoff (production-hardening review, 2026-07-29): because
- * `endpoint` is globally unique rather than scoped per-principal, a second
- * principal who already knows a first principal's real endpoint URL could
- * re-register it to themselves, silently unsubscribing the original owner.
- * In practice this requires already knowing a high-entropy, server-generated
- * value that is never exposed to any other principal or caller -- reachable
- * only via database access or intercepting the original subscribe call, at
- * which point far worse is already possible. Impact is bounded to
- * denial-of-notification (a push message encrypted for the wrong browser's
- * keys can't be read by anyone), never disclosure, on a best-effort channel.
- * Scoping the constraint to (principal_id, endpoint) instead was considered
- * and rejected: it would let two principals coexist on one real browser
- * subscription, which cannot happen in practice (one browser, one
- * subscription, one owner) and would just mask the same re-registration
- * behavior under a different key.
- */
-export function upsertPushSubscription(
-  db: Database,
-  s: { id: string; principal_id: string; endpoint: string; p256dh: string; auth: string },
-): void {
-  db.prepare(
-    `INSERT INTO push_subscriptions (id, principal_id, endpoint, p256dh, auth, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(endpoint) DO UPDATE SET
-       principal_id = excluded.principal_id,
-       p256dh = excluded.p256dh,
-       auth = excluded.auth`,
-  ).run(s.id, s.principal_id, s.endpoint, s.p256dh, s.auth, now());
-}
-
-export function getPushSubscriptionsFor(db: Database, principalId: string) {
-  return db.prepare(`SELECT * FROM push_subscriptions WHERE principal_id = ?`).all(principalId) as Array<{
-    id: string; principal_id: string; endpoint: string; p256dh: string; auth: string;
-  }>;
-}
-
-/**
- * Called when the push service itself reports the subscription is gone
- * (404/410 from a send attempt) — the standard web-push hygiene signal that
- * the browser unsubscribed or the endpoint expired, so retrying it forever
- * would just accumulate permanent failures.
- */
-export function deletePushSubscription(db: Database, endpoint: string): void {
-  db.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?`).run(endpoint);
 }
 
 export function insertApprovalLink(

@@ -60,15 +60,6 @@ CREATE TABLE IF NOT EXISTS enrolment_tokens (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS push_subscriptions (
-  id TEXT PRIMARY KEY,
-  principal_id TEXT NOT NULL REFERENCES principals(id),
-  endpoint TEXT NOT NULL UNIQUE,
-  p256dh TEXT NOT NULL,
-  auth TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
 -- An approval link deliberately has no expires_at of its own: it inherits the
 -- attestation's, which is the single source of truth for whether a request is
 -- still live. UNIQUE (attestation_id, principal_id) is what makes a token

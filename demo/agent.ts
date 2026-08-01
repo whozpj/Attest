@@ -23,7 +23,7 @@ async function main(): Promise<void> {
 
   console.log(`\nAction requires human approval.`);
   console.log(`  ${created.summary.headline}`);
-  console.log(`\nApprove at:\n  ${created.approve_url}&principal=${principalId}\n`);
+  console.log(`\nApprove at:\n  ${created.approve_url}\n`);
 
   // Block until the human resolves it.
   for (;;) {
