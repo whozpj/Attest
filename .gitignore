@@ -3,6 +3,8 @@ dist/
 *.db
 keys/
 test-results/
+mail/
+.superpowers/
 
 # ios/HumanAttest.xcodeproj is generated from ios/project.yml via
 # `xcodegen generate` -- project.yml and the Swift sources are the tracked
