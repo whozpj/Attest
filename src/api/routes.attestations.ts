@@ -7,7 +7,7 @@ import { validateEnvelope } from "../actions/schemas.js";
 import { beginApproval, finishApproval } from "../webauthn/authentication.js";
 import { effectiveStatus, recordDecision } from "./state.js";
 import { FailClosedError, type Decision } from "../types.js";
-import { notifyApprovers } from "../push/send.js";
+import { emailApprovers } from "./notify.js";
 
 function assertDecision(decision: unknown): asserts decision is Decision {
   if (decision !== "approve" && decision !== "deny") {
@@ -75,23 +75,25 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
       expires_at: new Date(Date.now() + envelope.ttl_seconds * 1000).toISOString(),
     });
 
-    // Best-effort: a push notification never affects whether attestation
-    // creation succeeds (see src/push/send.ts — notifyApprovers never
-    // throws). The `approve_url` response field below is unchanged; this
-    // only sends a personalized, app.html-pointing url to each approver's
-    // subscribed device(s), if any.
+    // Best-effort: an approval email never affects whether attestation
+    // creation succeeds (see ./notify.ts — emailApprovers never throws).
+    // Each approver gets a link personal to them, carrying a token that
+    // grants a view of this request and nothing more.
     //
-    // Fire-and-forget, deliberately not awaited: each send is a real
-    // outbound HTTPS request with no timeout configured, so a slow or
-    // blackholed push endpoint must never add latency to (or, worst case,
-    // block on an OS-level TCP timeout) the attestation-creation request
-    // path. notifyApprovers is guaranteed to never throw or reject (see the
-    // outer try/catch around the per-principal loop body in
-    // src/push/send.ts), so this is safe with zero unhandled-rejection risk.
-    void notifyApprovers(db, app.ctx.vapid, envelope.approver_ids, {
+    // Fire-and-forget, deliberately not awaited: a send is a real outbound
+    // SMTP conversation with no timeout configured, so a slow or blackholed
+    // mail host must never add latency to (or, worst case, block on an
+    // OS-level TCP timeout) the attestation-creation request path.
+    // emailApprovers is guaranteed to never throw or reject (see the
+    // per-principal try/catch in ./notify.ts), so this is safe with zero
+    // unhandled-rejection risk.
+    void emailApprovers(db, app.ctx.email, {
       attestation_id: attestationId,
-      headline: action.summary.headline,
-      approveUrlBase: `${app.ctx.baseUrl}/approve/app.html?attestation=${attestationId}`,
+      approverIds: envelope.approver_ids,
+      summary: action.summary,
+      requestedBy: envelope.requested_by,
+      expiresAt: new Date(Date.now() + envelope.ttl_seconds * 1000).toISOString(),
+      baseUrl: app.ctx.baseUrl,
     }, app.log);
 
     return reply.status(201).send({
@@ -99,7 +101,7 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
       status: "pending",
       payload_hash: action.payload_hash,
       summary: action.summary,
-      approve_url: `${app.ctx.baseUrl}/approve/index.html?attestation=${attestationId}`,
+      approve_url: `${app.ctx.baseUrl}/requests/${attestationId}`,
     });
   });
 

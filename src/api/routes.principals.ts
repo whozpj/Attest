@@ -6,6 +6,7 @@ import * as q from "../db/queries.js";
 import { beginRegistration, finishRegistration } from "../webauthn/registration.js";
 import { FailClosedError } from "../types.js";
 import { withAuditDetail } from "../audit-detail.js";
+import { emailEnrolment } from "./notify.js";
 
 const pendingChallenges = new Map<string, string>();
 
@@ -120,14 +121,25 @@ export function registerPrincipalRoutes(app: FastifyInstance & { ctx: AppContext
     }
 
     // Finding 3: issue the single-use enrolment token here, at creation, so
-    // whoever delivers the enrolment link to the human (out of band — email,
-    // Slack, etc. — genuinely out of scope for this prototype) has something
-    // to include in it besides the non-secret principal_id.
+    // whoever delivers the enrolment link to the human has something to
+    // include in it besides the non-secret principal_id.
     const enrolment_token = randomBytes(32).toString("base64url");
     q.insertEnrolmentToken(app.ctx.db, {
       token: enrolment_token, principal_id: id,
       expires_at: new Date(Date.now() + ENROLMENT_TOKEN_TTL_SECONDS * 1000).toISOString(),
     });
+
+    // Additive, and best-effort in the same fire-and-forget sense as the
+    // approval mail: the response below still returns the token, so an agent
+    // platform provisioning users programmatically is unaffected and a mail
+    // failure costs convenience, never the ability to enrol. It does narrow
+    // the previously unspecified out-of-band channel to "the address this
+    // principal was registered with", which is a more honest statement of the
+    // trust assumption than "some channel this prototype cannot see".
+    void emailEnrolment(app.ctx.db, app.ctx.email, {
+      principalId: id, email, displayName: display_name,
+      token: enrolment_token, baseUrl: app.ctx.baseUrl,
+    }, app.log);
 
     return reply.status(201).send({ principal_id: id, enrolment_token });
   });

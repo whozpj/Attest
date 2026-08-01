@@ -46,10 +46,23 @@ async function seedPrincipalWithRealCredential(email: string) {
   return { principalId, cred };
 }
 
+// Scoped to rejection rows. Creating an attestation now also writes a
+// best-effort delivery row per approver (email_sent / email_failed, see
+// src/api/notify.ts), which is attestation-scoped and entirely legitimate --
+// it is not a rejection and never was one. This suite's invariant is "one
+// rejection writes one row", so counting delivery rows alongside it would
+// make the assertion fail for a reason that has nothing to do with the
+// double-write defect it exists to guard. Everything else stays counted, so
+// the "assert the count, not just the event string" property below -- the
+// thing that catches a throw site and the central handler disagreeing on the
+// event name -- is fully intact.
+const DELIVERY_EVENTS = new Set(["email_sent", "email_failed"]);
+
 function auditRowsFor(attestationId: string): Array<{ event: string }> {
-  return app.ctx.db
+  const rows = app.ctx.db
     .prepare("SELECT event FROM audit_log WHERE attestation_id = ?")
     .all(attestationId) as Array<{ event: string }>;
+  return rows.filter((r) => !DELIVERY_EVENTS.has(r.event));
 }
 
 describe("defect: a single rejection through real HTTP writes exactly one audit_log row, not two", () => {

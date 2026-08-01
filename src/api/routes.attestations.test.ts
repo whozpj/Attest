@@ -431,7 +431,7 @@ describe("POST /v1/attestations builds URLs from the server's configured baseUrl
       payload: { requested_by: "int", approver_ids: [principal_id], action: wire },
     });
     expect(res.json().approve_url).toBe(
-      `https://attest.example.com/approve/index.html?attestation=${res.json().attestation_id}`,
+      `https://attest.example.com/requests/${res.json().attestation_id}`,
     );
   });
 
@@ -440,6 +440,6 @@ describe("POST /v1/attestations builds URLs from the server's configured baseUrl
       method: "POST", url: "/v1/attestations",
       payload: { requested_by: "int", approver_ids: ["prin_whatever"], action: wire },
     });
-    expect(res.json().approve_url).toContain("http://localhost:3000/approve/index.html");
+    expect(res.json().approve_url).toContain("http://localhost:3000/requests/");
   });
 });

@@ -4,27 +4,35 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyHelmet from "@fastify/helmet";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import { openDb, type Database } from "../db/index.js";
 import { loadOrCreateKeypair, type Keypair } from "../crypto/tokens.js";
-import { loadOrCreateVapidKeys, type VapidKeys } from "../push/vapid.js";
+import { loadTransport, type EmailTransport } from "../email/index.js";
 import * as q from "../db/queries.js";
 import { FailClosedError } from "../types.js";
 import { auditDetailOf, auditEventOf } from "../audit-detail.js";
 import { registerPrincipalRoutes } from "./routes.principals.js";
 import { registerAttestationRoutes } from "./routes.attestations.js";
 import { registerVerifyRoutes } from "./routes.verify.js";
-import { registerPushRoutes } from "./routes.push.js";
 import { registerHealthRoutes } from "./routes.health.js";
 import { loadConfig } from "../config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-export interface AppContext { db: Database; kp: Keypair; vapid: VapidKeys; baseUrl: string; }
+// The Vite build output the SPA is served from. Absent in a fresh checkout
+// until `npm run build:web` has run, and absent in unit tests, which never
+// need it -- so the mount below is conditional rather than assumed. Left
+// unconditional, @fastify/static throws ENOENT at registration time and takes
+// every API test down with it over a missing frontend asset directory.
+const WEB_DIST = join(here, "../../web/dist");
+
+export interface AppContext { db: Database; kp: Keypair; email: EmailTransport; baseUrl: string; }
 
 export async function buildServer(
   opts: {
     dbPath?: string; keyDir?: string; baseUrl?: string;
     logger?: FastifyServerOptions["logger"]; trustProxy?: boolean;
+    email?: EmailTransport;
   } = {},
 ): Promise<FastifyInstance & { ctx: AppContext }> {
   // Two-step cast: Fastify's own instance type and our decorated type don't
@@ -38,30 +46,26 @@ export async function buildServer(
     trustProxy: opts.trustProxy ?? false,
   }) as unknown as FastifyInstance & { ctx: AppContext };
 
+  const cfg = loadConfig();
+
   app.ctx = {
     db: openDb(opts.dbPath ?? ":memory:"),
     kp: await loadOrCreateKeypair(opts.keyDir ?? join(process.cwd(), "keys")),
-    vapid: loadOrCreateVapidKeys(opts.keyDir ?? join(process.cwd(), "keys")),
-    baseUrl: opts.baseUrl ?? loadConfig().baseUrl,
+    // Injectable so a test can record what would have been sent without
+    // touching the filesystem or an SMTP host.
+    email: opts.email ?? loadTransport({
+      smtpUrl: cfg.smtpUrl, mailFrom: cfg.mailFrom, mailDir: cfg.mailDir,
+    }),
+    baseUrl: opts.baseUrl ?? cfg.baseUrl,
   };
 
-  await app.register(fastifyStatic, {
-    root: join(here, "../../demo/public"),
-    prefix: "/approve/",
-  });
-
-  // Vendor bundle so the demo pages can use @simplewebauthn/browser without a
-  // build step. Snippet from QA (Task 11 step 2) — server.ts is our file, so
-  // the edit lands here rather than in demo/.
-  await app.register(fastifyStatic, {
-    root: join(here, "../../node_modules/@simplewebauthn/browser/dist/bundle"),
-    prefix: "/vendor/",
-    decorateReply: false,
-  });
-
-  app.get("/vendor/simplewebauthn-browser.js", (_req, reply) =>
-    reply.sendFile("index.umd.min.js", join(here, "../../node_modules/@simplewebauthn/browser/dist/bundle")),
-  );
+  // The SPA replaces the demo/public pages formerly mounted at /approve/. It
+  // is served from the root so the app's own URLs (/signin, /requests/:id,
+  // /a/:token) are real paths a mail client can link to, not hash fragments.
+  const hasWebDist = existsSync(WEB_DIST);
+  if (hasWebDist) {
+    await app.register(fastifyStatic, { root: WEB_DIST, prefix: "/" });
+  }
 
   await app.register(fastifyRateLimit, {
     max: 100,
@@ -73,7 +77,10 @@ export async function buildServer(
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        // Tightened from ['self', 'unsafe-inline'] now that the hand-written
+        // demo pages are gone: the Vite-built SPA ships external CSS only,
+        // and vite.config.ts's assetsInlineLimit: 0 keeps it that way.
+        styleSrc: ["'self'"],
         imgSrc: ["'self'", "data:"],
         connectSrc: ["'self'"],
         manifestSrc: ["'self'"],
@@ -182,6 +189,26 @@ export async function buildServer(
   // other; this makes it one too, without changing the 404 body Fastify
   // would have sent on its own.
   app.setNotFoundHandler((req, reply) => {
+    // SPA history fallback. React Router owns /signin, /requests/:id, /a/:token
+    // and friends; those are real URLs a browser navigates to directly (an
+    // approver clicks one straight out of an email), so an unmatched GET that
+    // wants HTML has to return the app shell rather than a 404.
+    //
+    // Deliberately narrow. It never applies to the API namespaces, so a
+    // mistyped /v1 or /web route still 404s as a rejection instead of quietly
+    // returning 200 and an HTML page to a caller expecting JSON -- which would
+    // turn every API typo into a confusing parse error at the client and,
+    // worse, hide route-space probing from the audit log. Non-GET requests and
+    // requests that don't accept HTML fall through to the audited 404 below
+    // for the same reason.
+    const isApiPath = req.url.startsWith("/v1")
+      || req.url.startsWith("/web")
+      || req.url.startsWith("/.well-known");
+    const wantsHtml = (req.headers.accept ?? "").includes("text/html");
+    if (hasWebDist && req.method === "GET" && !isApiPath && wantsHtml) {
+      return reply.status(200).type("text/html").sendFile("index.html", WEB_DIST);
+    }
+
     q.audit(app.ctx.db, {
       attestation_id: null,
       event: "route_not_found",
@@ -201,7 +228,6 @@ export async function buildServer(
   registerPrincipalRoutes(app);
   registerAttestationRoutes(app);
   registerVerifyRoutes(app);
-  registerPushRoutes(app);
   registerHealthRoutes(app);
 
   return app;
