@@ -384,36 +384,15 @@ describe("GET /v1/attestations/:id on an expired attestation", () => {
   });
 });
 
-describe("POST /v1/attestations sends a push to every approver with a registered subscription", () => {
-  it("calls the push service for a subscribed approver", async () => {
-    const principalRes = await app.inject({
-      method: "POST", url: "/v1/principals",
-      payload: { email: "push-attest@test.local", display_name: "Push" },
-    });
-    const { principal_id, enrolment_token } = principalRes.json();
-
-    await app.inject({
-      method: "POST",
-      url: `/v1/principals/${principal_id}/push-subscription?token=${enrolment_token}`,
-      payload: {
-        subscription: { endpoint: "https://push.example/attest", keys: { p256dh: "k", auth: "s" } },
-      },
-    });
-
-    // web-push's sendNotification makes a real outbound HTTPS request to
-    // the endpoint URL. "https://push.example/attest" doesn't resolve, so
-    // the call fails — which is exactly the case send.ts already handles by
-    // design (never throws, doesn't delete on a non-404/410 failure). This
-    // test only asserts that attestation creation itself is unaffected by
-    // that failure, not that delivery succeeds (Task 7's e2e test covers a
-    // real subscription end to end).
-    const res = await app.inject({
-      method: "POST", url: "/v1/attestations",
-      payload: { requested_by: "int", approver_ids: [principal_id], action: wire },
-    });
-    expect(res.statusCode).toBe(201);
-  });
-});
+// The push-delivery test that lived here was removed with Web Push itself.
+// It had become vacuous: it POSTed to /v1/principals/:id/push-subscription,
+// a route that no longer exists, silently discarded the 404, and then
+// asserted only that attestation creation returned 201 -- so it passed while
+// testing nothing its own name claimed. The property it was really guarding,
+// "a delivery failure never breaks attestation creation", now belongs to the
+// email path and is covered directly in src/api/notify.test.ts ("never throws
+// when the transport fails, and audits the failure", plus "keeps mailing the
+// remaining approvers after one fails").
 
 describe("POST /v1/attestations builds URLs from the server's configured baseUrl", () => {
   it("uses the configured baseUrl, not a hardcoded host", async () => {
