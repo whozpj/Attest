@@ -72,10 +72,10 @@ export function registerWebSessionRoutes(app: FastifyInstance & { ctx: AppContex
 
     // An unregistered email, and a registered one with no enrolled
     // credential, both get a well-formed options object with a real random
-    // challenge that simply cannot be satisfied. Returning 404 or an empty
-    // allowCredentials for one and not the other would turn this endpoint
-    // into an account-enumeration oracle -- the same reasoning that makes
-    // POST /v1/principals opaque about duplicate emails.
+    // challenge that simply cannot be satisfied. Returning 404 for one and
+    // not the other would turn this endpoint into an account-enumeration
+    // oracle -- the same reasoning that makes POST /v1/principals opaque
+    // about duplicate emails.
     const challenge = newLoginChallenge();
     if (principal && creds.length > 0) {
       q.insertLoginChallenge(db, {
@@ -84,13 +84,27 @@ export function registerWebSessionRoutes(app: FastifyInstance & { ctx: AppContex
       });
     }
 
+    // `allowCredentials` is deliberately omitted, not merely emptied for the
+    // unregistered case: sending the real list only when the email has an
+    // enrolled passkey (QA finding QA-1, tests/security/
+    // session-approval-separation.test.ts) told any unauthenticated caller
+    // both whether an address is registered AND, when it is, handed back its
+    // actual credential ID -- the exact enumeration oracle
+    // routes.attestations.ts's /options endpoint already refuses to be for
+    // approvals. This is fixable rather than just closable because
+    // registration.ts already asks for `residentKey: "preferred"` -- an
+    // omitted `allowCredentials` is the documented, standard way to trigger a
+    // discoverable-credential ("usernameless") prompt, where the platform
+    // authenticator itself offers the user's passkeys for this RP ID and the
+    // browser tells the server which one was used. The response is now byte-
+    // identical in shape across a registered, credential-less, and unknown
+    // email; only the (invisible to the caller) database write above differs.
     return generateAuthenticationOptions({
       rpID: RP.id,
       // `.slice()` narrows to Uint8Array<ArrayBuffer>, matching the library's
       // own Uint8Array_ type under strict mode -- same reason beginApproval
       // does it in src/webauthn/authentication.ts.
       challenge: new Uint8Array(Buffer.from(challenge, "base64url")).slice(),
-      allowCredentials: creds.map((c) => ({ id: c.credential_id })),
       userVerification: "preferred",
     });
   });
