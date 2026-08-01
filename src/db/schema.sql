@@ -69,6 +69,35 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at TEXT NOT NULL
 );
 
+-- An approval link deliberately has no expires_at of its own: it inherits the
+-- attestation's, which is the single source of truth for whether a request is
+-- still live. UNIQUE (attestation_id, principal_id) is what makes a token
+-- personal -- one shared token would let one approver open another's link.
+CREATE TABLE IF NOT EXISTS approval_links (
+  token TEXT PRIMARY KEY,
+  attestation_id TEXT NOT NULL REFERENCES attestations(id),
+  principal_id TEXT NOT NULL REFERENCES principals(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (attestation_id, principal_id)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(id),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS login_challenges (
+  challenge TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES principals(id),
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_principal ON sessions(principal_id);
+CREATE INDEX IF NOT EXISTS idx_links_attestation ON approval_links(attestation_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attestation_id TEXT,

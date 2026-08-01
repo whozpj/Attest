@@ -238,6 +238,159 @@ export function deletePushSubscription(db: Database, endpoint: string): void {
   db.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?`).run(endpoint);
 }
 
+export function insertApprovalLink(
+  db: Database, l: { token: string; attestation_id: string; principal_id: string },
+): void {
+  db.prepare(
+    `INSERT INTO approval_links (token, attestation_id, principal_id, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(l.token, l.attestation_id, l.principal_id, now());
+}
+
+export function getApprovalLink(db: Database, token: string) {
+  return db.prepare(`SELECT * FROM approval_links WHERE token = ?`).get(token) as
+    | { token: string; attestation_id: string; principal_id: string; created_at: string }
+    | undefined;
+}
+
+/**
+ * Deliberately has no expiry of its own: an approval link inherits the
+ * attestation's lifetime, which is the single source of truth for whether a
+ * request is still live. A link to a resolved attestation still resolves, and
+ * the page shows the outcome instead of a dead end -- safe precisely because
+ * the payload was purged at resolution, so there is nothing left to leak.
+ */
+export function getApprovalLinkFor(db: Database, attestationId: string, principalId: string) {
+  return db.prepare(
+    `SELECT * FROM approval_links WHERE attestation_id = ? AND principal_id = ?`,
+  ).get(attestationId, principalId) as
+    | { token: string; attestation_id: string; principal_id: string }
+    | undefined;
+}
+
+export function insertSession(
+  db: Database, s: { id: string; principal_id: string; expires_at: string },
+): void {
+  db.prepare(
+    `INSERT INTO sessions (id, principal_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+  ).run(s.id, s.principal_id, s.expires_at, now());
+}
+
+/**
+ * Expiry is enforced in the WHERE clause, not by the caller. A session row
+ * that has aged out is indistinguishable from one that never existed, so
+ * there is no code path where a caller can forget the check and silently
+ * accept a stale cookie.
+ */
+export function getSession(db: Database, id: string) {
+  return db.prepare(`SELECT * FROM sessions WHERE id = ? AND expires_at > ?`).get(id, now()) as
+    | { id: string; principal_id: string; expires_at: string }
+    | undefined;
+}
+
+export function deleteSession(db: Database, id: string): void {
+  db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+}
+
+export function insertLoginChallenge(
+  db: Database, c: { challenge: string; principal_id: string; expires_at: string },
+): void {
+  db.prepare(
+    `INSERT INTO login_challenges (challenge, principal_id, expires_at, used_at)
+     VALUES (?, ?, ?, NULL)`,
+  ).run(c.challenge, c.principal_id, c.expires_at);
+}
+
+/**
+ * Atomic check-and-burn in one statement, mirroring consumeEnrolmentToken:
+ * two requests racing on the same challenge cannot both observe it as unused.
+ * Unknown, expired, already-used, and wrong-principal all return false
+ * identically -- the caller collapses them into one opaque rejection.
+ */
+export function consumeLoginChallenge(db: Database, challenge: string, principalId: string): boolean {
+  const result = db.prepare(
+    `UPDATE login_challenges SET used_at = ?
+     WHERE challenge = ? AND principal_id = ? AND used_at IS NULL AND expires_at > ?`,
+  ).run(now(), challenge, principalId, now());
+  return result.changes === 1;
+}
+
+export function getPrincipalByEmail(db: Database, email: string) {
+  return db.prepare(`SELECT * FROM principals WHERE email = ?`).get(email) as
+    | { id: string; email: string; display_name: string; status: string }
+    | undefined;
+}
+
+export interface RequestListRow {
+  attestation_id: string;
+  type: string;
+  status: AttestationStatus;
+  requested_by: string;
+  created_at: string;
+  resolved_at: string | null;
+  expires_at: string;
+  payload_hash: string;
+  my_decision: Decision | null;
+}
+
+/**
+ * Membership is tested with a JSON array scan rather than `LIKE`, because
+ * approver_ids is a JSON-encoded array in a TEXT column and a substring match
+ * would treat "prin_1" as a member of a list containing "prin_10" -- the same
+ * substring-vs-set-membership trap validateEnvelope guards against on the
+ * write side.
+ *
+ * `before` paginates on created_at, which is stable and monotonic per row;
+ * rowid breaks ties so two attestations created in the same millisecond
+ * cannot cause a page boundary to skip or repeat a row.
+ *
+ * Bound by name, not position. `principal_id` is referenced twice from two
+ * different parts of the statement -- once by the correlated my_decision
+ * subquery in the SELECT list, once by the membership test in the WHERE --
+ * and the WHERE clauses themselves are assembled conditionally. Positional
+ * `?` binding there is silently order-dependent on where each placeholder
+ * lands in the *text* of the query, which is not the order a reader would
+ * assemble the array in; getting it wrong swaps a status filter for a
+ * principal id and quietly returns the wrong rows rather than erroring.
+ */
+export function listRequestsFor(
+  db: Database,
+  principalId: string,
+  opts: { limit: number; status?: AttestationStatus; before?: string },
+): RequestListRow[] {
+  const clauses = [
+    `EXISTS (SELECT 1 FROM json_each(att.approver_ids) WHERE json_each.value = @principal_id)`,
+  ];
+  const params: Record<string, unknown> = {
+    principal_id: principalId,
+    limit: opts.limit,
+  };
+
+  if (opts.status) { clauses.push(`att.status = @status`); params.status = opts.status; }
+  if (opts.before) { clauses.push(`att.created_at < @before`); params.before = opts.before; }
+
+  return db.prepare(
+    `SELECT att.id AS attestation_id, act.type AS type, att.status AS status,
+            act.requested_by AS requested_by, att.created_at AS created_at,
+            att.resolved_at AS resolved_at, att.expires_at AS expires_at,
+            act.payload_hash AS payload_hash,
+            (SELECT ap.decision FROM attestation_approvals ap
+              WHERE ap.attestation_id = att.id AND ap.principal_id = @principal_id) AS my_decision
+       FROM attestations att
+       JOIN actions act ON act.id = att.action_id
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY att.created_at DESC, att.rowid DESC
+      LIMIT @limit`,
+  ).all(params) as RequestListRow[];
+}
+
+export function getAuditFor(db: Database, attestationId: string) {
+  return db.prepare(
+    `SELECT event, actor, created_at FROM audit_log
+      WHERE attestation_id = ? ORDER BY id`,
+  ).all(attestationId) as Array<{ event: string; actor: string | null; created_at: string }>;
+}
+
 export function audit(
   db: Database,
   e: { attestation_id: string | null; event: string; actor: string | null; detail: string | null },

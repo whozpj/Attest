@@ -8,6 +8,10 @@ export interface AppConfig {
   dbPath: string;
   keyDir: string;
   trustProxy: boolean;
+  smtpUrl?: string;
+  mailFrom: string;
+  mailDir: string;
+  sessionTtlHours: number;
 }
 
 /**
@@ -44,6 +48,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // X-Forwarded-For header. Set TRUST_PROXY=true only when deploying
     // behind exactly one reverse proxy you control (see docs/PRODUCTION.md).
     trustProxy: env.TRUST_PROXY === "true",
+    smtpUrl: env.SMTP_URL,
+    mailFrom: env.MAIL_FROM ?? `no-reply@${new URL(baseUrl).hostname}`,
+    mailDir: env.MAIL_DIR ?? "mail",
+    sessionTtlHours: env.SESSION_TTL_HOURS ? Number(env.SESSION_TTL_HOURS) : 168,
   };
 
   if (config.nodeEnv === "production" &&
@@ -51,6 +59,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error(
       "refusing to start with NODE_ENV=production while RP_ID/APP_BASE_URL still " +
       "point at localhost -- set RP_ID and APP_BASE_URL to your real domain",
+    );
+  }
+
+  // Same reasoning as the RP_ID guard above: a production deployment with no
+  // SMTP_URL falls back to writing .eml files into a local directory, which
+  // means no approver is ever notified of anything. That failure is silent --
+  // requests simply sit pending until they expire -- so it must be caught at
+  // boot rather than discovered from an absence of approvals.
+  if (config.nodeEnv === "production" && !config.smtpUrl) {
+    throw new Error(
+      "refusing to start with NODE_ENV=production and no SMTP_URL -- approval " +
+      "emails would be written to disk instead of sent, and no approver would " +
+      "ever be notified",
     );
   }
 
