@@ -18,6 +18,15 @@
 - **Anti-enumeration parity.** A rejection must not reveal whether an email, principal, or credential exists. Distinguish causes only via `withAuditDetail` (server-side only).
 - **Email is best-effort.** Sending must never throw into, or add latency to, `POST /v1/attestations`. Fire-and-forget, exactly like today's `notifyApprovers`.
 - **Payload purge is sacred.** Resolved attestations expose metadata only. No task may retain rendered payload text past resolution.
+- **Never run `npm install` / `npm uninstall`.** Every dependency this plan
+  needs is already installed and `build:web` is already in `package.json`
+  (nodemailer 9, `@types/nodemailer`, vite 8, `@vitejs/plugin-react`, react 19,
+  react-dom, `@types/react`, `@types/react-dom`, react-router-dom). Multiple
+  workers share one working tree, and concurrent npm writes corrupt
+  `package-lock.json`. Only worker D removes packages, and only in Task D1.
+  Skip any install step written into a task below — it is already done.
+- **Never `git add -A` or `git add .`.** Stage only the explicit paths your
+  task owns. Other workers have uncommitted work in this same tree.
 - Node 20+. ESM (`"type": "module"`) — all relative imports end in `.js`.
 - Test runner: `npm test` (Vitest). E2E: `npm run e2e` (Playwright).
 - `src/api/routes.web.ts` must stay under ~250 lines; split into `routes.web.session.ts` / `routes.web.requests.ts` if it grows past that.
@@ -2295,8 +2304,14 @@ Expected: PASS. Any failure here is a real regression from the deletion, not an 
 
 - [ ] **Step 5: Commit**
 
+Stage explicit paths only — never `git add -A`. Other workers have uncommitted
+changes in this same working tree, and `-A` would sweep their half-finished
+work into your commit.
+
 ```bash
-git add -A
+git add -u src/push src/api/routes.push.ts src/api/routes.push.test.ts \
+           demo/public ios tests/e2e/push-approval.spec.ts
+git add package.json package-lock.json
 git commit -m "refactor: remove Web Push, the PWA, and the native iOS app"
 ```
 
