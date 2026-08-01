@@ -17,5 +17,10 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npx tsc --noEmit
       - run: npm test
+      # The e2e suite drives the real SPA served from web/dist, not the static
+      # demo pages it used to. web/dist is gitignored, so without this step
+      # Playwright would load the server's SPA fallback against a missing
+      # index.html and every spec would fail on a blank page.
+      - run: npm run build:web
       - run: npm run e2e
       - run: npm audit --audit-level=high

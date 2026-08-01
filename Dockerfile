@@ -22,6 +22,25 @@ RUN npm ci --omit=dev --ignore-scripts \
     && rm -f node_modules/better-sqlite3/prebuilds/*.node \
     && npm rebuild better-sqlite3 --build-from-source
 
+# The SPA is built in its own stage rather than in `deps`, because the two
+# stages need opposite dependency sets: `deps` installs --omit=dev to keep the
+# runtime node_modules slim, while Vite/React live in devDependencies and are
+# needed only to produce static files. Nothing from this stage reaches the
+# runtime image except web/dist.
+#
+# --ignore-scripts here skips better-sqlite3's native compile entirely: this
+# stage never loads the addon, it only runs Vite, so paying for a node-gyp
+# build (and carrying python3/make/g++) would be pure build time for nothing.
+FROM node:22-slim AS webbuild
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY web ./web
+RUN npm run build:web
+
 FROM node:22-slim
 
 WORKDIR /app
@@ -31,8 +50,21 @@ COPY package.json package-lock.json ./
 COPY src ./src
 COPY demo ./demo
 COPY tsconfig.json ./
+# Fastify serves this at / with an SPA history fallback (src/api/server.ts
+# resolves it as ../../web/dist relative to src/api/). The image is broken
+# without it -- every non-API route would 404 -- so it is copied, never
+# mounted.
+COPY --from=webbuild /app/web/dist ./web/dist
 
 ENV NODE_ENV=production
+# config.ts defaults HOST to 127.0.0.1, which is the right default for `npm run
+# dev` (don't put a dev server on the LAN) but wrong inside a container: the
+# process would bind the container's loopback only, so EXPOSE/-p publishes a
+# port that resets every connection. The container's network namespace is the
+# isolation boundary here, not the bind address. docker-compose.yml already
+# sets this explicitly; setting it in the image too means a plain
+# `docker run -p` works instead of appearing to start and then refusing traffic.
+ENV HOST=0.0.0.0
 EXPOSE 3000
 
 # The app writes its DB and keys under /data (see docker-compose.yml's volume

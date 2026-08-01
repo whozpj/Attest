@@ -7,3 +7,9 @@ test-results
 .superpowers
 docs
 tests
+mail
+# web/src and web/index.html must stay IN the context -- the webbuild stage
+# compiles them. Only the build output is excluded, so a stale local
+# `npm run build:web` can never be copied in and silently shadow the fresh
+# build the image makes for itself.
+web/dist

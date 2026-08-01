@@ -6,9 +6,6 @@ test-results/
 mail/
 .superpowers/
 
-# ios/HumanAttest.xcodeproj is generated from ios/project.yml via
-# `xcodegen generate` -- project.yml and the Swift sources are the tracked
-# source of truth, not the derived .xcodeproj (standard XcodeGen convention;
-# avoids painful pbxproj XML merge conflicts).
-ios/HumanAttest.xcodeproj/
-ios/HumanAttest.xcworkspace/
+# Vite build output. Built by `npm run build:web`, by the Dockerfile's
+# webbuild stage, and by CI before the e2e run -- never committed.
+web/dist/

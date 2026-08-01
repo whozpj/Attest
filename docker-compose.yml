@@ -9,6 +9,16 @@ services:
       HOST: "0.0.0.0"
       APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL to your real https domain}
       RP_ID: ${RP_ID:?set RP_ID to your real domain}
+      # Required in production: config.ts refuses to boot without it, because
+      # the fallback transport writes approval emails to a directory inside the
+      # container, which means no approver is ever notified and requests just
+      # sit pending until they expire -- a silent failure.
+      SMTP_URL: ${SMTP_URL:?set SMTP_URL to your real SMTP server}
+      # MAIL_FROM is intentionally not listed: config.ts falls back to
+      # no-reply@<APP_BASE_URL host> with `??`, which only triggers on
+      # undefined. Mapping it here as ${MAIL_FROM:-} would pass an empty
+      # string through and silently produce a From: header of "". Add it as a
+      # real value only if you need to override the default.
       DB_PATH: /data/human-attest.db
       KEY_DIR: /data/keys
     volumes:
