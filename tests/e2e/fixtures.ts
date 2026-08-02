@@ -1,6 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 export async function withVirtualAuthenticator(page: Page): Promise<string> {
   const cdp = await page.context().newCDPSession(page);
@@ -232,4 +234,14 @@ export async function signDecisionChallenge(
     { base, attestationId, principalId, decision },
   );
   return signAuthenticationChallenge(page, optionsJSON);
+}
+
+/**
+ * A real MCP client, talking Streamable HTTP to the real running e2e server
+ * -- the same wire protocol any MCP-compatible agent framework would use.
+ */
+export async function mcpClient(baseUrl: string): Promise<Client> {
+  const client = new Client({ name: "e2e-test-client", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
+  return client;
 }

@@ -36,6 +36,14 @@ export async function buildServer(
     dbPath?: string; keyDir?: string; baseUrl?: string;
     logger?: FastifyServerOptions["logger"]; trustProxy?: boolean;
     email?: EmailTransport;
+    // Defaults to the documented production value (docs/PRODUCTION.md's
+    // capacity-planning math is written against 100/min) -- only
+    // tests/e2e/server.ts, an isolated throwaway instance that real traffic
+    // never reaches, overrides this. Five parallel Playwright workers
+    // hitting one shared dev process produce a request burst no single real
+    // client ever would; that's a test-infrastructure fact, not a reason to
+    // loosen what a real deployment enforces.
+    globalRateLimit?: { max: number; timeWindow: string };
   } = {},
 ): Promise<FastifyInstance & { ctx: AppContext }> {
   // Two-step cast: Fastify's own instance type and our decorated type don't
@@ -70,7 +78,7 @@ export async function buildServer(
     await app.register(fastifyStatic, { root: WEB_DIST, prefix: "/" });
   }
 
-  await app.register(fastifyRateLimit, {
+  await app.register(fastifyRateLimit, opts.globalRateLimit ?? {
     max: 100,
     timeWindow: "1 minute",
   });
