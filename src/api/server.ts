@@ -214,6 +214,7 @@ export async function buildServer(
     // for the same reason.
     const isApiPath = req.url.startsWith("/v1")
       || req.url.startsWith("/web")
+      || req.url.startsWith("/mcp")
       || req.url.startsWith("/.well-known");
     const wantsHtml = (req.headers.accept ?? "").includes("text/html");
     if (hasWebDist && req.method === "GET" && !isApiPath && wantsHtml) {

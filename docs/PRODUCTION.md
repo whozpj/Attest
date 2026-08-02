@@ -184,6 +184,11 @@ Stated plainly, so it isn't discovered the hard way in an incident:
   this is included, not omitted, but is
   worth calling out here since it's the thing most likely to look like a
   deployment bug on first boot.
+- **Caller authentication on `/mcp`.** Same posture as `/v1/*`: this
+  deployment does not authenticate the caller of the MCP endpoint itself. Any
+  client that can reach `/mcp` can invoke `request_approval`,
+  `check_approval`, and `wait_for_approval`. Put this endpoint behind the
+  same network boundary you'd put `/v1/*` behind.
 
 ## 6. Load characteristics
 
@@ -225,6 +230,18 @@ requests per attestation (1 POST + 1 GET), the real per-run ceiling under
 the global limit is roughly 100 / 2 ≈ **49 attestations per rolling
 minute**, not 30. Keep `total` comfortably under that per one-minute run, or
 space runs out across multiple windows to test higher totals.
+
+This math is REST-only and doesn't cover `/mcp`, which draws from the same
+global bucket but with a different shape: an MCP client's `connect()` and
+each subsequent tool call (`request_approval`, `check_approval`,
+`wait_for_approval`) each cost some number of requests against `POST /mcp`,
+so an MCP-heavy integration doesn't map cleanly onto the "2 requests per
+attestation" figure above. `wait_for_approval` in particular holds its
+underlying HTTP connection open for as long as it polls (up to its timeout),
+rather than completing in one quick round trip like the REST reads above —
+so the request count alone understates how long that one request occupies a
+connection. Size any deployment expecting significant MCP traffic with this
+difference in mind rather than reusing the REST-only numbers directly.
 
 ## 7. Audit trail
 

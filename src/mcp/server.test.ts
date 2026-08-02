@@ -65,6 +65,21 @@ describe("check_approval tool", () => {
     });
     expect(result.isError).toBe(true);
   });
+
+  it("audits the rejection and returns the error code in structuredContent, unlike a bare message", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "check_approval",
+      arguments: { attestation_id: "att_does_not_exist" },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({ error: "unknown_attestation", message: "unknown attestation" });
+
+    const rows = db.prepare("SELECT event, detail FROM audit_log WHERE event = 'unknown_attestation'").all() as
+      { event: string; detail: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].detail).toBe("check_approval: unknown attestation");
+  });
 });
 
 describe("request_approval tool", () => {
@@ -104,6 +119,55 @@ describe("request_approval tool", () => {
       },
     });
 
+    expect(result.isError).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS c FROM attestations").get()).toEqual({ c: 0 });
+  });
+
+  it("audits the unknown_principal rejection and returns the error code, not just a bare message", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" },
+        approver_emails: ["nobody@e.com"],
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: "unknown_principal", message: "no enrolled approver with email nobody@e.com",
+    });
+
+    const rows = db.prepare("SELECT event, detail FROM audit_log WHERE event = 'unknown_principal'").all() as
+      { event: string; detail: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].detail).toBe("request_approval: no enrolled approver with email nobody@e.com");
+  });
+
+  it("dedupes a duplicate approver_emails entry into a single resolved principal id", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" },
+        approver_emails: ["approver@e.com", "approver@e.com"],
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    const structured = result.structuredContent as { attestation_id: string };
+    const att = q.getAttestation(db, structured.attestation_id);
+    expect(att?.approver_ids).toEqual(["prin_1"]);
+  });
+
+  it("fails closed, instead of creating an unsatisfiable attestation, when required_approvals exceeds the distinct approver count after dedup", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" },
+        approver_emails: ["approver@e.com", "approver@e.com"],
+        required_approvals: 2,
+      },
+    });
     expect(result.isError).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS c FROM attestations").get()).toEqual({ c: 0 });
   });
@@ -232,5 +296,20 @@ describe("wait_for_approval tool", () => {
     });
     expect(Date.now() - started).toBeLessThan(500);
     expect(result.isError).toBe(true);
+  });
+
+  it("audits the unknown_attestation rejection", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "wait_for_approval",
+      arguments: { attestation_id: "att_nope", timeout_seconds: 5 },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({ error: "unknown_attestation", message: "unknown attestation" });
+
+    const rows = db.prepare("SELECT event, detail FROM audit_log WHERE event = 'unknown_attestation'").all() as
+      { event: string; detail: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].detail).toBe("wait_for_approval: unknown attestation");
   });
 });

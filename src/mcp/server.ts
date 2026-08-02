@@ -26,9 +26,24 @@ const WAIT_POLL_MS = 1000;
  * Anything that is NOT a FailClosedError is rethrown: an unrecognised
  * failure should surface as a real error, not be silently downgraded to a
  * tool result the caller might mistake for an ordinary rejection.
+ *
+ * Unlike a REST rejection, a tool error never throws, so it never reaches
+ * server.ts's central setErrorHandler -- the only other place q.audit gets
+ * called for a rejection. This is the one place that gap gets closed for
+ * /mcp, which (like /v1/*) requires no caller authentication.
  */
-function toolError(message: string) {
-  return { isError: true as const, content: [{ type: "text" as const, text: message }] };
+function toolError(db: Database, err: FailClosedError, toolName: string) {
+  q.audit(db, {
+    attestation_id: null,
+    event: err.code,
+    actor: null,
+    detail: `${toolName}: ${err.message}`,
+  });
+  return {
+    isError: true as const,
+    content: [{ type: "text" as const, text: err.message }],
+    structuredContent: { error: err.code, message: err.message },
+  };
 }
 
 /**
@@ -42,7 +57,7 @@ function toolError(message: string) {
  */
 function resolveApprovers(db: Database, emails: string[]): string[] {
   const ids: string[] = [];
-  for (const email of emails) {
+  for (const email of new Set(emails)) {
     const principal = q.getPrincipalByEmail(db, email);
     if (!principal) {
       throw new FailClosedError("unknown_principal", 404, `no enrolled approver with email ${email}`);
@@ -72,7 +87,7 @@ export function buildMcpServer(ctx: McpContext): McpServer {
           structuredContent: view as unknown as Record<string, unknown>,
         };
       } catch (err) {
-        if (err instanceof FailClosedError) return toolError(err.message);
+        if (err instanceof FailClosedError) return toolError(ctx.db, err, "check_approval");
         throw err;
       }
     },
@@ -110,7 +125,7 @@ export function buildMcpServer(ctx: McpContext): McpServer {
       try {
         approverIds = resolveApprovers(ctx.db, args.approver_emails);
       } catch (err) {
-        if (err instanceof FailClosedError) return toolError(err.message);
+        if (err instanceof FailClosedError) return toolError(ctx.db, err, "request_approval");
         throw err;
       }
 
@@ -134,7 +149,7 @@ export function buildMcpServer(ctx: McpContext): McpServer {
           structuredContent: result as unknown as Record<string, unknown>,
         };
       } catch (err) {
-        if (err instanceof FailClosedError) return toolError(err.message);
+        if (err instanceof FailClosedError) return toolError(ctx.db, err, "request_approval");
         throw err;
       }
     },
@@ -154,19 +169,19 @@ export function buildMcpServer(ctx: McpContext): McpServer {
           .describe(`Defaults to ${WAIT_DEFAULT_SECONDS}. Capped at ${WAIT_MAX_SECONDS}.`),
       },
     },
-    async (args) => {
+    async (args, extra) => {
       const timeoutMs = (args.timeout_seconds ?? WAIT_DEFAULT_SECONDS) * 1000;
       const deadline = Date.now() + timeoutMs;
 
       let view;
       try {
         view = getAttestationView(ctx.db, args.attestation_id);
-        while (view.status === "pending" && Date.now() < deadline) {
+        while (view.status === "pending" && Date.now() < deadline && !extra.signal.aborted) {
           await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
           view = getAttestationView(ctx.db, args.attestation_id);
         }
       } catch (err) {
-        if (err instanceof FailClosedError) return toolError(err.message);
+        if (err instanceof FailClosedError) return toolError(ctx.db, err, "wait_for_approval");
         throw err;
       }
 

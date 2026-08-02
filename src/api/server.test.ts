@@ -165,6 +165,21 @@ describe("an unknown route writes an audit row instead of vanishing untracked", 
     expect(res.statusCode).toBe(404);
     expect(auditRows().some((r) => r.event === "route_not_found")).toBe(true);
   });
+
+  it("GET /mcp/anything with an HTML accept header: audited 404 JSON, not the SPA shell", async () => {
+    const res = await app.inject({
+      method: "GET", url: "/mcp/anything", headers: { accept: "text/html" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(auditRows().some((r) => r.event === "route_not_found" && r.detail === "GET /mcp/anything")).toBe(true);
+  });
+
+  it("GET /mcpp (a near-miss typo) with an HTML accept header: also audited 404", async () => {
+    const res = await app.inject({ method: "GET", url: "/mcpp", headers: { accept: "text/html" } });
+    expect(res.statusCode).toBe(404);
+    expect(auditRows().some((r) => r.event === "route_not_found" && r.detail === "GET /mcpp")).toBe(true);
+  });
 });
 
 describe("a POST with no request body at all never reaches a handler as bare `undefined`", () => {
