@@ -1,7 +1,7 @@
 # Human-Attest
 
 [![CI](https://github.com/whozpj/Attest/actions/workflows/ci.yml/badge.svg)](https://github.com/whozpj/Attest/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
 Human-Attest lets an AI agent get real human sign-off, with a passkey,
@@ -136,8 +136,8 @@ This is a prototype, not a hardened production system:
 - `/v1/*` and `/mcp` don't authenticate their caller; they're meant to sit
   behind your own network boundary, not be exposed publicly.
 
-More detail in `SECURITY.md` and `docs/PRODUCTION.md`.
+More detail in `docs/PRODUCTION.md`.
 
 ## License
 
-[MIT](LICENSE)
+MIT
