@@ -971,6 +971,20 @@ Expected: FAIL — `/mcp` 404s (no such route yet).
 
 - [ ] **Step 3: Write `src/mcp/routes.ts`**
 
+**Corrected after Task 5's implementer drove real, sequential HTTP requests
+against a live server**: the installed SDK does *not* allow one
+`StreamableHTTPServerTransport` built in stateless mode to be reused across
+requests — its `handleRequest` throws `"Stateless transport cannot be reused
+across requests. Create a new transport per request."` on the second call
+(`webStandardStreamableHttp.js`'s `_hasHandledRequest` guard), confirmed
+directly against the installed package. A shared-instance implementation (as
+originally written below) 500s on every request after the first. The fix —
+build a fresh `McpServer`/transport pair per request — is the SDK's own
+documented pattern for stateless mode, and preserves this task's actual
+design intent (D2: no session id, no session map, no session-affinity
+requirement) exactly; only the "build once, reuse" implementation detail was
+wrong. Use this version:
+
 ```ts
 import type { FastifyInstance } from "fastify";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -978,18 +992,21 @@ import { buildMcpServer } from "./server.js";
 import type { AppContext } from "../api/server.js";
 
 /**
- * Stateless mode (design doc D2): one McpServer and one transport, built
- * once at registration time and reused for every request. No per-session
- * state to track means no in-memory session map that could grow unbounded
- * if a client disconnects without an explicit close, and no session
- * affinity requirement if this app is ever run behind a load balancer.
+ * Stateless mode (design doc D2): no session id, no in-memory session map
+ * that could grow unbounded if a client disconnects without an explicit
+ * close, and no session affinity requirement if this app is ever run behind
+ * a load balancer.
+ *
+ * A fresh McpServer + transport is built for every request rather than one
+ * shared pair built once at registration -- the installed SDK enforces this
+ * in stateless mode (see the note above); building fresh instances per
+ * request is its own documented pattern, not a workaround.
  */
 export async function registerMcpRoutes(app: FastifyInstance & { ctx: AppContext }): Promise<void> {
-  const mcpServer = buildMcpServer({ db: app.ctx.db, email: app.ctx.email, baseUrl: app.ctx.baseUrl });
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await mcpServer.connect(transport);
-
   app.post("/mcp", async (req, reply) => {
+    const mcpServer = buildMcpServer({ db: app.ctx.db, email: app.ctx.email, baseUrl: app.ctx.baseUrl });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+
     // Hand the raw Node request/response to the transport and tell Fastify
     // not to touch the response itself -- the transport ends it directly
     // (streamableHttp.d.ts's handleRequest signature is built for exactly
@@ -997,6 +1014,12 @@ export async function registerMcpRoutes(app: FastifyInstance & { ctx: AppContext
     // pre-parsed body, which req.body already is thanks to server.ts's own
     // preValidation hook normalizing it upstream of every route).
     reply.hijack();
+    reply.raw.on("close", () => {
+      void transport.close();
+      void mcpServer.close();
+    });
+
+    await mcpServer.connect(transport);
     await transport.handleRequest(req.raw, reply.raw, req.body);
   });
 
