@@ -1,8 +1,16 @@
 {
-  "name": "project",
+  "name": "human-attest",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A cryptographic authorization layer for AI agents: a specific human approves a specific structured action via a WebAuthn passkey before it executes. REST, browser, and MCP entrypoints; email-delivered approval links; offline-verifiable signed tokens.",
+  "main": "src/main.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/whozpj/Attest.git"
+  },
+  "homepage": "https://github.com/whozpj/Attest#readme",
+  "bugs": {
+    "url": "https://github.com/whozpj/Attest/issues"
+  },
   "directories": {
     "doc": "docs"
   },
@@ -14,9 +22,17 @@
     "e2e": "playwright test",
     "build:web": "vite build --config web/vite.config.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "webauthn",
+    "passkeys",
+    "ai-agents",
+    "mcp",
+    "model-context-protocol",
+    "authorization",
+    "human-in-the-loop"
+  ],
+  "author": "Prithvi Raj",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@fastify/helmet": "^13.1.0",

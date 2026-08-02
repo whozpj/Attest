@@ -1,7 +1,59 @@
 # Human-Attest
 
-A local prototype of a service that proves a specific human cryptographically
-authorized a specific agent action.
+[![CI](https://github.com/whozpj/Attest/actions/workflows/ci.yml/badge.svg)](https://github.com/whozpj/Attest/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
+
+A cryptographic authorization layer for AI agents: a specific human, using a
+registered passkey, signs off on a specific structured action before it
+executes — a wire transfer, an email, a document signature, an infra change.
+Not identity verification, not deepfake detection. A signed,
+non-replayable proof that this exact action, and no other, was approved.
+
+**TypeScript · Fastify · WebAuthn (passkeys) · React · SQLite · MCP**
+
+- [Architecture](#architecture)
+- [What this proves](#what-this-proves)
+- [Prerequisites](#prerequisites)
+- [Install](#install)
+- [Build the web UI](#build-the-web-ui)
+- [Run the server](#run-the-server)
+- [How the approver is reached](#how-the-approver-is-reached)
+- [Enrol a passkey](#enrol-a-passkey)
+- [Run the demo agent](#run-the-demo-agent)
+- [Call it from an MCP client](#call-it-from-an-mcp-client)
+- [Browse your request history](#browse-your-request-history)
+- [Run the tests](#run-the-tests)
+- [Run the end-to-end suite](#run-the-end-to-end-suite)
+- [Prototype limitations](#prototype-limitations)
+- [How this was built](#how-this-was-built)
+- [License](#license)
+
+## Architecture
+
+Three API surfaces share one implementation, never three:
+
+```
+                              /v1/*  (REST — agents & verifiers)
+Agent / MCP client ─────┐     /web/* (browser — sign-in, history)
+                         ├──▶ /mcp   (Model Context Protocol tools)
+                         │
+                         ▼
+              src/api/attestations-core.ts
+        (canonicalize → hash → render → email → purge)
+                         │
+                         ▼
+        WebAuthn challenge = hash({act, att, decision})
+        ES256 JWS, verifiable offline via /.well-known/jwks.json
+```
+
+An AI agent can reach this service three ways — a plain REST call, the
+browser UI a human uses directly, or an MCP tool call from any
+MCP-compatible agent framework (Claude, LangGraph, etc.) — but all three
+funnel through the same `createAttestation`/`getAttestationView` functions,
+the same closed-world per-action-type payload schema, and the same WebAuthn
+challenge binding. No surface can show a human different text than what got
+hashed and signed, because none of them render anything themselves.
 
 ## What this proves
 
@@ -205,3 +257,23 @@ This is a prototype, not a production system:
   above not to be. A party holding the original action can still verify the
   hash matches.
 - None of this is production-ready.
+
+## How this was built
+
+Every feature here — including the browser rework and the MCP server —
+started as a written design spec and implementation plan before any code,
+and every task went through an independent code review that actually ran
+the code and traced claims against the real source rather than trusting a
+report. That process is in the repo, not just the commit log:
+[`docs/superpowers/specs/`](docs/superpowers/specs/) and
+[`docs/superpowers/plans/`](docs/superpowers/plans/) hold the specs and
+plans as written, before implementation. A few of those reviews caught
+genuine bugs — including a real SDK contract violation, an account-
+enumeration leak on sign-in, and a security invariant that had silently
+stopped holding for one new entrypoint — each with a commit that says so
+plainly rather than folding the fix in quietly. `SECURITY.md` and
+`docs/PRODUCTION.md` document what's still honestly unresolved.
+
+## License
+
+[MIT](LICENSE)

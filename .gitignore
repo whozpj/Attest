@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.db
+*.db-shm
+*.db-wal
 keys/
 test-results/
 mail/
@@ -10,3 +12,12 @@ mail-e2e/
 # Vite build output. Built by `npm run build:web`, by the Dockerfile's
 # webbuild stage, and by CI before the e2e run -- never committed.
 web/dist/
+
+# Editor/OS/tooling artifacts -- never anything this project's own build
+# or test process produces, so none of it belongs in history regardless
+# of which machine or agent runs here.
+.DS_Store
+.claude/
+.playwright-mcp/
+.vscode/
+.idea/
