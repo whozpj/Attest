@@ -17,14 +17,35 @@ shape of each body — not the runtime behavior of a deployed instance.
 - [`POST /v1/principals`](#post-v1principals)
 - [`POST /v1/principals/:id/credentials/options`](#post-v1principalsidcredentialsoptions)
 - [`POST /v1/principals/:id/credentials`](#post-v1principalsidcredentials)
-- [`GET /v1/push/vapid-public-key`](#get-v1pushvapid-public-key)
-- [`POST /v1/principals/:id/push-subscription`](#post-v1principalsidpush-subscription)
 - [`POST /v1/attestations`](#post-v1attestations)
 - [`GET /v1/attestations/:id`](#get-v1attestationsid)
 - [`POST /v1/attestations/:id/options`](#post-v1attestationsidoptions)
 - [`POST /v1/attestations/:id/decision`](#post-v1attestationsiddecision)
 - [`POST /v1/attestations/verify`](#post-v1attestationsverify)
 - [`GET /.well-known/jwks.json`](#get-well-knownjwksjson)
+
+**Browser API** (`/web/*`) — cookie sessions and link tokens, for the web UI:
+
+- [`POST /web/session/options`](#post-websessionoptions)
+- [`POST /web/session`](#post-websession)
+- [`DELETE /web/session`](#delete-websession)
+- [`GET /web/me`](#get-webme)
+- [`GET /web/requests`](#get-webrequests)
+- [`GET /web/requests/:id`](#get-webrequestsid)
+- [`GET /web/link/:token`](#get-weblinktoken)
+
+## Two API surfaces
+
+`/v1/*` is for agents and verifiers: no cookies, no sessions, unchanged by the
+move to a web UI. `/web/*` is for the browser: authenticated by a session
+cookie or a link token.
+
+The approve/deny ceremony deliberately has **no `/web/` twin**. The browser
+calls the same `POST /v1/attestations/:id/options` and
+`POST /v1/attestations/:id/decision` that any other client would. Those two
+routes carry the security properties this project has spent its history
+hardening, and duplicating them would mean duplicating every guard and
+inviting the two copies to drift.
 
 ---
 
@@ -157,72 +178,6 @@ to call `POST /v1/principals` again for a fresh one, not just retry
 
 ---
 
-### `GET /v1/push/vapid-public-key`
-
-Returns the VAPID public key for Web Push subscription setup. No authentication required — this endpoint is called by browsers during the subscription flow.
-
-**Request:** no body or query parameters.
-
-```
-GET /v1/push/vapid-public-key
-```
-
-**Response** — `200 OK`
-
-```json
-{ "publicKey": "<base64url VAPID public key>" }
-```
-
-**Status codes**
-
-| Status | Meaning |
-|---|---|
-| 200 | Key returned |
-
----
-
-### `POST /v1/principals/:id/push-subscription`
-
-Registers a principal for Web Push notifications. Establishes the push subscription at enrolment time only, bundled into the existing token-gated credential flow. The subscription is tied to the principal's enrolment and cannot be changed or re-registered later without starting enrolment over.
-
-**Request:** body and query parameter `token` (required) — the `enrolment_token` from `POST /v1/principals`, the same token used for credential registration.
-
-```
-POST /v1/principals/prin_abc123/push-subscription?token=<enrolment_token>
-```
-
-**Request body**
-
-```json
-{
-  "subscription": {
-    "endpoint": "https://fcm.googleapis.com/...",
-    "keys": {
-      "p256dh": "<base64url>",
-      "auth": "<base64url>"
-    }
-  }
-}
-```
-
-**Response** — `201 Created`
-
-```json
-{ "ok": true }
-```
-
-**Status codes**
-
-| Status | Meaning |
-|---|---|
-| 201 | Subscription registered |
-| 400 | `push_subscription_invalid` — request body is malformed (missing `subscription`, `endpoint`, or `keys`) |
-| 404 | `unknown_principal` — no principal with this id, **or** `token` is missing, malformed, bound to a different principal, expired, or already used (see [`POST /v1/principals/:id/credentials/options`](#post-v1principalsidcredentialsoptions) for the same non-consuming token-check semantics) |
-
-Like the credential enrolment endpoints, this call only *checks* the token — it does not consume it. The same `enrolment_token` can be used for both the credential and push-subscription flows within the same enrolment window, but (per design) the push subscription can never be updated or re-registered later. A principal whose stored push subscription is lost (device cleared, browser data deleted) would need to complete enrolment again for a fresh subscription.
-
----
-
 ### `POST /v1/attestations`
 
 Requests human authorization for an action. The caller submits the full
@@ -271,7 +226,7 @@ field outside that schema — including a caller-supplied `summary` or
       { "label": "Account", "value": "••••4821" }
     ]
   },
-  "approve_url": "http://localhost:3000/approve/index.html?attestation=att_<uuid>"
+  "approve_url": "http://localhost:3000/requests/att_<uuid>"
 }
 ```
 
@@ -284,6 +239,15 @@ field outside that schema — including a caller-supplied `summary` or
 
 Keep `payload_hash` from this response. It is what you compare the resolved
 token against later — see the [quickstart](../integration/quickstart.md).
+
+`approve_url` and the link each approver is actually emailed are two
+different things. `approve_url` points at `/requests/:id`, which requires a
+signed-in session — useful to print or log, but not what a first-time
+approver clicks. Each approver separately receives an email (best-effort,
+see [`docs/human-attest-mvp.md`](../human-attest-mvp.md) §9) containing a
+link to `/a/<link_token>`, a single-use-per-approver token that needs no
+session and resolves to this same attestation — see
+[`GET /web/link/:token`](#get-weblinktoken).
 
 ---
 
@@ -573,6 +537,248 @@ private key material is ever included.
 
 ---
 
+## Browser API (`/web/*`)
+
+Everything below is for the SPA (`web/`): a session cookie or a link token
+authenticates each call, never `principal_id` alone in the body. None of
+these routes are meant for an agent or a verifier — use `/v1/*` for that.
+
+### `POST /web/session/options`
+
+Begins passkey sign-in. Returns WebAuthn `PublicKeyCredentialRequestOptionsJSON`
+to pass to `startAuthentication`.
+
+**Request body**
+
+```json
+{ "email": "demo@example.com" }
+```
+
+**Response** — `200 OK`, always, regardless of whether `email` is registered
+
+```json
+{ "challenge": "...", "rpId": "localhost", "userVerification": "preferred" }
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 200 | Always, for any well-formed `email` |
+| 400 | `payload_invalid` — `email` missing or not a string |
+
+**This response is deliberately identical in shape** for a registered email
+with an enrolled passkey, a registered email with none, and an email that
+isn't registered at all — no `allowCredentials` field is ever returned,
+regardless of which case this is. Design §4.3 requires exactly this: a
+version that varied `allowCredentials` by case, tried during development,
+turned this endpoint into an account-enumeration oracle that also handed an
+unauthenticated caller a real credential ID for a known email (closed as
+QA-1; see `tests/security/session-approval-separation.test.ts`). Because
+passkey registration already asks for a discoverable credential
+(`residentKey: "preferred"`), omitting `allowCredentials` is not a
+workaround — it's the spec-documented way to trigger a "usernameless" prompt,
+where the platform authenticator offers the user's own passkeys for this RP
+ID and the browser reports back which one they picked. `email` is used only
+to look up which principal a login challenge gets bound to server-side; it
+is never echoed back.
+
+---
+
+### `POST /web/session`
+
+Completes passkey sign-in, verifying the assertion against the challenge
+issued above and setting a session cookie on success.
+
+**Request body**
+
+```json
+{
+  "email": "demo@example.com",
+  "response": { "...": "the AuthenticationResponseJSON from startAuthentication" }
+}
+```
+
+**Response** — `204 No Content`, with `Set-Cookie: ha_session=...; HttpOnly; SameSite=Lax` (plus `Secure` when the server's configured `baseUrl` is `https://`)
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 204 | Session created |
+| 400 | `payload_invalid` — `email` missing, or `response` missing/malformed (no string `id`) |
+| 401 | `login_challenge_invalid` — one opaque code for every failure: unknown email, credential not recognised or bound to a different principal, no matching unused login challenge, or signature verification failed |
+
+The login challenge is random (32 bytes from `crypto.randomBytes`) and
+stored server-side in `login_challenges` — **never** derived from an action,
+unlike an approval challenge (`hash({act, att, decision})`). That asymmetry
+is what makes an approval assertion unusable here and a sign-in assertion
+unusable to approve or deny anything; see
+`tests/security/session-approval-separation.test.ts`, which proves both
+directions with real signatures. The challenge is also burned atomically as
+part of the same verification that accepts it, so a captured sign-in
+assertion cannot be replayed into a second session.
+
+---
+
+### `DELETE /web/session`
+
+Signs out: deletes the session row and clears the cookie.
+
+**Response** — `204 No Content`, always, whether or not a valid session cookie was presented.
+
+---
+
+### `GET /web/me`
+
+Returns the signed-in principal.
+
+**Response** — `200 OK`
+
+```json
+{ "principal_id": "prin_abc123", "email": "demo@example.com", "display_name": "Demo User" }
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 200 | Session valid |
+| 401 | `no_session` — no session cookie presented |
+| 401 | `session_expired` — the cookie names a session that has expired or doesn't exist |
+
+---
+
+### `GET /web/requests`
+
+Lists every attestation naming the signed-in principal as an approver, most
+recent first.
+
+**Query parameters** — all optional: `status` (`pending`/`approved`/`denied`/`expired`), `limit` (default 25, max 100), `before` (an opaque cursor — pass back the previous page's `next_before`)
+
+**Response** — `200 OK`
+
+```json
+{
+  "items": [
+    {
+      "attestation_id": "att_<uuid>",
+      "type": "wire_transfer",
+      "status": "pending",
+      "requested_by": "demo-agent",
+      "created_at": "2026-08-01T12:00:00.000Z",
+      "resolved_at": null,
+      "expires_at": "2026-08-01T12:15:00.000Z",
+      "payload_hash": "sha256:<hex>",
+      "my_decision": null
+    }
+  ],
+  "next_before": null
+}
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 200 | Even if `items` is empty |
+| 400 | `payload_invalid` — `status` present but not one of the four valid values |
+| 401 | `no_session` / `session_expired` |
+
+`next_before` is `null` once there is no further page; otherwise pass it as
+`before` to fetch the next one. This list never contains an attestation
+naming a different principal as its only approver — see
+`tests/security/history-isolation.test.ts`.
+
+---
+
+### `GET /web/requests/:id`
+
+Detail view for one attestation: everything `GET /web/requests` returns for
+it, plus the quorum count, the rendered summary (while still available), and
+the full audit trail.
+
+**Response** — `200 OK`
+
+```json
+{
+  "attestation_id": "att_<uuid>",
+  "type": "wire_transfer",
+  "status": "approved",
+  "requested_by": "demo-agent",
+  "created_at": "2026-08-01T12:00:00.000Z",
+  "resolved_at": "2026-08-01T12:03:11.000Z",
+  "expires_at": "2026-08-01T12:15:00.000Z",
+  "payload_hash": "sha256:<hex>",
+  "my_decision": "approve",
+  "required_approvals": 1,
+  "approvals": 1,
+  "summary": null,
+  "audit": [
+    { "event": "email_sent", "actor": "prin_abc123", "created_at": "2026-08-01T12:00:00.010Z" },
+    { "event": "decision_approve", "actor": "prin_abc123", "created_at": "2026-08-01T12:03:11.000Z" },
+    { "event": "attestation_approved", "actor": "prin_abc123", "created_at": "2026-08-01T12:03:11.000Z" }
+  ]
+}
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 200 | Found, and this principal is a listed approver |
+| 401 | `no_session` / `session_expired` |
+| 404 | `unknown_attestation` — no such attestation, **or** the signed-in principal is not one of its approvers |
+
+**`summary` is `null` once the attestation resolves.** As with
+`GET /v1/attestations/:id`, the underlying payload is purged the moment a
+result is final, so there is no rendered text left to serve — only
+`payload_hash` survives, forever. This is the design's central retention
+tradeoff (spec §7), applied identically here: history shows type, status,
+timestamps, the requester, the hash, and the full audit trail, never the
+original "Wire $25,000.00 USD to Acme Corp" text. A caller holding the
+original action can still verify the hash matches.
+
+**A non-approver requesting a real attestation id gets the exact same
+response** — same status, same code, same body — **as requesting an id that
+does not exist.** Distinguishing the two would let a signed-in user probe
+for the existence of other people's requests.
+
+---
+
+### `GET /web/link/:token`
+
+Resolves an emailed approval link to the attestation and principal it was
+issued for. No session required.
+
+**Response** — `200 OK`
+
+```json
+{ "attestation_id": "att_<uuid>", "principal_id": "prin_abc123", "email": "demo@example.com" }
+```
+
+**Status codes**
+
+| Status | Meaning |
+|---|---|
+| 200 | Token recognised |
+| 404 | `unknown_link` — no such token |
+
+**This is a view capability, not an authorization.** Resolving a link
+records an `approval_link_viewed` audit event and nothing else — no
+attestation status changes, no approval row is written, regardless of how
+many times or by whom it's resolved. Deciding still requires the real
+passkey ceremony against `POST /v1/attestations/:id/options` and
+`.../decision`, and a link issued to one principal cannot be used to submit
+a decision as a different one — both properties are proven directly in
+`tests/security/link-token-capability.test.ts`. The token has no expiry of
+its own; it inherits the attestation's, since that is the single source of
+truth for whether a request is still live. A link to an already-resolved
+attestation still resolves — safely, since the payload behind it was already
+purged — so the page can show the outcome instead of a dead end.
+
+---
+
 ## Error codes
 
 Every rejection is fail-closed and, on the server, written to the audit log.
@@ -609,3 +815,14 @@ distinguish "sent nothing" from "sent garbage"), `unknown_credential` (401,
 a decision response naming a credential that isn't recognised or belongs to
 someone else), and `registration_failed` / `no_pending_registration` (400,
 passkey registration failures).
+
+**`/web/*` adds four more, none of which appear on `/v1/*`:**
+`no_session` (401, no session cookie presented), `session_expired` (401, the
+session cookie names a row that has expired or never existed —
+indistinguishable from `no_session` in every way except the code itself, so
+neither reveals whether a cookie value was ever valid), `login_challenge_invalid`
+(401, `POST /web/session` — one opaque code covering an unknown email, a
+credential not recognised or bound to a different principal, no matching
+unused login challenge, or a signature that failed to verify), and
+`unknown_link` (404, `GET /web/link/:token` given a token that doesn't
+exist).

@@ -49,6 +49,16 @@ amounts, recipient names, or email bodies.
 npm install
 ```
 
+## Build the web UI
+
+```bash
+npm run build:web
+```
+
+Builds the React SPA to `web/dist`, which the server mounts at `/`. Do this
+before starting the server (and again after changing anything under `web/`),
+or every page will 404. It is gitignored, so a fresh clone always needs it.
+
 ## Run the server
 
 ```bash
@@ -58,6 +68,21 @@ npm run dev
 Starts Fastify on `http://localhost:3000`, backed by a SQLite file at
 `human-attest.db` and a signing keypair generated on first run under `keys/`
 (both are gitignored). Stop it with `Ctrl-C`.
+
+## How the approver is reached
+
+Approvers are notified by **email**. Each message carries a link to this
+service's web UI, where the approver reviews the request and decides with
+their passkey. The link is a view capability only — opening it reveals the
+request, but it cannot approve or deny anything. Only the authenticator can
+do that, which is the whole point: a click-to-approve link would downgrade
+the claim from "this human's authenticator signed this exact action hash" to
+"someone read this inbox."
+
+With `SMTP_URL` unset (the default for local development), mail is not sent
+anywhere — each message is written to `mail/` as an `.eml` file you can open
+in any mail client, or just read. That is also what lets the end-to-end suite
+drive the real notification path with no external account.
 
 ## Enrol a passkey
 
@@ -70,21 +95,25 @@ curl -s -X POST http://localhost:3000/v1/principals \
   -d '{"email":"demo@example.com","display_name":"Demo User"}'
 ```
 
-This returns `{ "principal_id": "prin_...", "enrolment_token": "..." }`. The
-token is single-use and expires in 15 minutes — it's what proves whoever
+This returns `{ "principal_id": "prin_...", "enrolment_token": "..." }`, and
+also emails an enrolment link to that address — locally, look in `mail/` for
+the newest `.eml`. The response still carries the token because an agent
+platform provisioning users programmatically has a legitimate need for it;
+the email is additive.
+
+The token is single-use and expires in 15 minutes — it's what proves whoever
 opens the enrolment link next is the party this principal was created for,
-since `principal_id` alone is not secret (it ends up in `approve_url`'s query
-string). Then, with a platform authenticator available (Touch ID, Windows
-Hello, or a security key), open:
+since `principal_id` alone is not secret. Then, with a platform authenticator
+available (Touch ID, Windows Hello, or a security key), open the link from
+the email, or construct it yourself:
 
 ```
-http://localhost:3000/approve/enrol.html?principal=<principal_id>&token=<enrolment_token>
+http://localhost:3000/enrol?principal=<principal_id>&token=<enrolment_token>
 ```
 
-and click **Enrol passkey**. The page reports `enrolled` on success. Without
-a valid token, or with one already used, the request fails the same way a
-request for a principal that doesn't exist would — see
-`docs/api/reference.md`.
+and click **Enrol passkey**. Without a valid token, or with one already used,
+the request fails the same way a request for a principal that doesn't exist
+would — see `docs/api/reference.md`.
 
 ## Run the demo agent
 
@@ -92,11 +121,27 @@ request for a principal that doesn't exist would — see
 npm run demo -- <principal_id>
 ```
 
-The demo agent requests a $25,000 wire transfer approval, prints the
-rendered headline and an approval URL, and blocks. Open the printed URL in
-the same browser you enrolled with, click **Approve**, and the agent
+The demo agent requests a $25,000 wire transfer approval, prints the rendered
+headline and a link to the request, and blocks. An approval email lands in
+`mail/` at the same moment. Open either link in the same browser you enrolled
+with, click **Approve**, complete the passkey ceremony, and the agent
 verifies the resulting token against the action it originally requested
 before printing `Verified. Executing wire transfer.`
+
+## Browse your request history
+
+Sign in at `http://localhost:3000/signin` with the email you registered, using
+the same passkey. `/requests` lists every attestation you have been asked to
+decide, and each row opens a detail view with its audit trail.
+
+Sign-in challenges are random and stored server-side — deliberately *not*
+derived from any action, unlike an approval challenge. That asymmetry is
+load-bearing: an assertion captured during sign-in signs bytes no approval
+challenge can ever equal, so it can never be replayed to approve an action,
+and vice versa. The security suite asserts this directly.
+
+Note what a resolved request does **not** show: the original payload text.
+See the limitations below.
 
 ## Run the tests
 
@@ -111,21 +156,40 @@ tests across module seams, and the threat-model security suite.
 
 ```bash
 npx playwright install chromium
+npm run build:web
 npm run e2e
 ```
 
 Drives a real Chromium instance against the running server, using a CDP
-virtual authenticator so the passkey ceremonies run unattended.
+virtual authenticator so the passkey ceremonies run unattended. Because the
+file transport writes real `.eml` files, the suite reads the actual approval
+email off disk, extracts the actual link, and drives the actual flow — the
+notification path is covered end to end rather than mocked.
+
+`npm run build:web` is required first: the specs drive the real SPA, and
+`web/dist` is gitignored.
 
 ## Prototype limitations
 
 This is a prototype, not a production system:
 
-- The signing key sits on disk unencrypted.
-- There is no device-loss recovery.
-- Push delivery is real (Web Push, VAPID-based), but subscriptions are
-  registered at enrolment time only — there's no re-subscribe flow after
-  device loss or cleared site data.
-- There is no native iOS/Android app: this is a browser-installable PWA
-  using the same WebAuthn/Face-ID mechanism, only packaging differs.
+- **The signing key sits on disk unencrypted.** Anyone who can read
+  `keys/signing-key.json` can mint attestation tokens.
+- **There is no device-loss recovery.** A principal who loses their
+  authenticator cannot enrol a replacement; there is no re-enrolment or
+  account-recovery flow, and that is the honest cost of having no second
+  factor to fall back on.
+- **`SMTP_URL` is required in production.** With `NODE_ENV=production` and no
+  `SMTP_URL`, the server refuses to boot rather than silently writing approval
+  emails to a local directory — a failure that would otherwise be invisible
+  until someone noticed nothing was ever being approved.
+- **Resolved requests show metadata only.** Once an attestation is approved,
+  denied, or expired, the payload is purged, so history shows the action type,
+  status, requester, timestamps, `payload_hash`, each approver's decision, and
+  the audit trail — but never the original "Wire $25,000.00 USD to Acme Corp"
+  text. This is a deliberate tradeoff, not an oversight: retaining rendered
+  payload text forever to make history prettier would turn this service into
+  exactly the permanent store of wire amounts and recipient names it promises
+  above not to be. A party holding the original action can still verify the
+  hash matches.
 - None of this is production-ready.
