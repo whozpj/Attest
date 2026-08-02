@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildServer } from "./server.js";
-import { makeFakeCredential, signAssertion } from "../../tests/security/lib/webauthn-fake.js";
+import { makeFakeCredential, signAssertion } from "../webauthn/test-helpers/webauthn-fake.js";
 
 let app: Awaited<ReturnType<typeof buildServer>>;
 

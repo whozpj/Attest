@@ -1,6 +1,5 @@
 # Human-Attest
 
-[![CI](https://github.com/whozpj/Attest/actions/workflows/ci.yml/badge.svg)](https://github.com/whozpj/Attest/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
@@ -55,8 +54,7 @@ authenticator signed this exact action.
 
 ## Setup
 
-Requires Node.js 20+, and Chromium (via Playwright) if you want to run the
-end-to-end tests.
+Requires Node.js 20+.
 
 ```bash
 npm install
@@ -102,16 +100,12 @@ request history at `/requests`.
 ## Tests
 
 ```bash
-npm test                              # unit + integration + security suites
-
-npx playwright install chromium
-npm run build:web
-npm run e2e                           # real browser, real passkeys, real emails
+npm test
 ```
 
-The end-to-end suite drives an actual Chromium instance with a virtual
-authenticator, so the full passkey and email flow runs for real, not
-mocked.
+Runs the unit tests colocated with the source. A larger integration,
+security, and end-to-end (real browser, real passkeys, real emails) suite
+was used during development but isn't part of this published repo.
 
 ## Known limitations
 

@@ -1,8 +1,8 @@
-// tests/security/lib/webauthn-fake.ts
+// src/webauthn/test-helpers/webauthn-fake.ts
 //
-// A minimal software WebAuthn authenticator, used only by tests/security/**
-// to produce genuine, verifiable ECDSA assertions without a browser or CDP
-// virtual authenticator. This exists because some attacks in this suite need
+// A minimal software WebAuthn authenticator, used by tests that need
+// genuine, verifiable ECDSA assertions without a browser or CDP virtual
+// authenticator. This exists because some tests need
 // a real signature that src/webauthn/authentication.ts's actual verification
 // path (via @simplewebauthn/server) will accept as valid — a stubbed
 // public_key (e.g. Buffer.from([1,2,3])) is enough to exercise routing and
@@ -15,7 +15,7 @@
 // round-trip through verifyAuthenticationResponse.
 import { createHash, generateKeyPairSync, randomBytes, sign as signWithKey, type KeyObject } from "node:crypto";
 import { encodeCBOR } from "@levischuck/tiny-cbor";
-import { RP } from "../../../src/webauthn/config.js";
+import { RP } from "../config.js";
 
 export interface FakeCredential {
   credentialId: string; // base64url, used as both `id` and `rawId`

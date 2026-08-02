@@ -12,7 +12,7 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 // genuine ECDSA signatures) — reused here rather than hand-rolled, since it
 // already round-trips through this file's actual verification path. See
 // tests/security/decision-binding.test.ts for its other use.
-import { makeFakeCredential, signAssertion } from "../../tests/security/lib/webauthn-fake.js";
+import { makeFakeCredential, signAssertion } from "./test-helpers/webauthn-fake.js";
 
 let db: Database;
 const hash = hashCanonical('{"amount":2500000}');
