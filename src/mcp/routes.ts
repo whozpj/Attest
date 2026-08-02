@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildMcpServer } from "./server.js";
 import type { AppContext } from "../api/server.js";
+import * as q from "../db/queries.js";
 
 /**
  * Stateless mode (design doc D2): no session id, no in-memory session map
@@ -37,8 +38,38 @@ export async function registerMcpRoutes(app: FastifyInstance & { ctx: AppContext
       void mcpServer.close();
     });
 
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req.raw, reply.raw, req.body);
+    try {
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req.raw, reply.raw, req.body);
+    } catch (err) {
+      // A hijacked reply is fully off Fastify's plate, including on this
+      // handler throwing -- server.ts's central setErrorHandler (the one
+      // place every other route's rejection gets audited) never runs for
+      // this route. Without this, a throw here -- confirmed possible, not
+      // hypothetical: this is exactly how the shared-transport-reuse bug
+      // above surfaced -- would both hang the client's connection until it
+      // times out and leave zero trace in audit_log, defeating design §9's
+      // "every rejection writes an audit_log row" for this one route.
+      q.audit(app.ctx.db, {
+        attestation_id: null,
+        event: "mcp_request_failed",
+        actor: null,
+        detail: String(err),
+      });
+      // If the transport already started writing (e.g. it opened an SSE
+      // stream before failing partway through), the response is no longer
+      // in a state where a fresh status/body can be layered on top --
+      // attempting to would corrupt the stream or throw "write after end".
+      // Destroying the socket is the only safe move once bytes are already
+      // on the wire; a clean error response is only possible if nothing has
+      // been sent yet.
+      if (reply.raw.headersSent) {
+        reply.raw.destroy();
+      } else {
+        reply.raw.writeHead(500, { "content-type": "application/json" });
+        reply.raw.end(JSON.stringify({ error: "internal_error" }));
+      }
+    }
   });
 
   // The Streamable HTTP spec's GET is for a standalone server-initiated SSE
