@@ -245,10 +245,30 @@ difference in mind rather than reusing the REST-only numbers directly.
 
 ## 7. Audit trail
 
-Every rejection, approval decision, and expiry writes a row to the
-`audit_log` table (see `src/api/server.ts`'s central error handler and
-`src/api/state.ts`). To get the full audit trail out as newline-delimited
-JSON, oldest first:
+Every rejection on `/v1/*` and `/web/*`, every approval decision, and every
+expiry writes a row to the `audit_log` table (see `src/api/server.ts`'s
+central error handler and `src/api/state.ts`).
+
+**`/mcp` is a documented exception, not an oversight.** A `FailClosedError`
+a tool handler catches — an unenrolled `approver_emails` address, an unknown
+`attestation_id`, an invalid action payload — is audited at the point the
+handler catches it (`src/mcp/server.ts`'s `toolError`). But three narrower
+classes of MCP rejection are answered by `@modelcontextprotocol/sdk`'s own
+machinery *before* any tool handler runs at all, and never reach that audit
+point: a request whose arguments fail the tool's Zod input schema, a call
+naming a tool that doesn't exist, and a malformed JSON-RPC envelope. None of
+these represent an authorization bypass — each is still rejected, no
+attestation or credential state changes — but none leaves a trace in
+`audit_log` today. Since `/mcp` requires no caller authentication (§5), an
+unauthenticated client can currently drive an unbounded number of these
+three specific rejections with zero forensic trail. Closing this fully
+means intercepting responses the SDK's transport writes directly, before
+any application-level handler exists to catch them — a real design change,
+not a one-line fix, and deliberately not attempted as part of closing out
+the MCP feature. Known limitation; revisit before relying on `/mcp`'s audit
+trail for anything adversarial.
+
+To get the full audit trail out as newline-delimited JSON, oldest first:
 
 ```bash
 npx tsx scripts/export-audit-log.mts /path/to/human-attest.db
