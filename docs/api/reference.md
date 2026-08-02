@@ -211,6 +211,17 @@ structured payload, never display text; the service canonicalizes it (RFC
 field outside that schema — including a caller-supplied `summary` or
 `headline` — is rejected rather than silently dropped.
 
+**`wire_transfer`'s `amount` is an integer number of cents, not dollars** —
+`2500000` above is $25,000.00, not $2,500,000.00. Nothing in this schema
+rejects a caller who sends dollars by mistake (`47500` is simply a smaller,
+still-valid integer); the only signal is the rendered `summary.headline` in
+the response coming back 100x smaller than intended. Always check the
+returned summary reads correctly before letting a human act on it — this is
+true of every field on every type, but the cents convention is the one that's
+bitten a real caller during testing (see the MCP tool's own
+`request_approval` description, which states this explicitly for exactly
+this reason).
+
 **Response** — `201 Created`
 
 ```json

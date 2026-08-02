@@ -106,12 +106,27 @@ export function buildMcpServer(ctx: McpContext): McpServer {
         "this same structured payload, never supplied directly.",
       inputSchema: {
         type: z.enum(["wire_transfer", "send_email", "sign_document", "generic"])
-          .describe("wire_transfer: amount/currency/recipient_name/account_last4. " +
-            "send_email: to/subject/body. sign_document: document_name/document_hash. " +
-            "generic: title/detail -- use this for anything else (e.g. a PR merge, an infra change)."),
+          .describe(
+            "wire_transfer: amount (INTEGER CENTS, not dollars -- $47,500.00 is " +
+              "4750000, not 47500)/currency (ISO 4217, e.g. \"USD\")/recipient_name/" +
+              "account_last4 (string, e.g. \"7734\"). " +
+              "send_email: to/subject/body. sign_document: document_name/document_hash. " +
+              "generic: title/detail -- use this for anything else (e.g. a PR merge, an infra change).",
+          ),
         risk_tier: z.enum(["low", "medium", "high", "critical"]),
         payload: z.record(z.string(), z.unknown())
-          .describe("Fields required depend on `type`; see its description."),
+          .describe(
+            "Fields required depend on `type` (see its description) -- ONLY those " +
+              "fields, exactly, or the request is rejected closed with " +
+              "\"unexpected field: <name>\"; there is no free-text/reason/note field on " +
+              "any type. After calling this tool, always re-read the returned " +
+              "`summary.headline` and confirm it states the amount/recipient you " +
+              "intended before calling wait_for_approval -- the server renders that " +
+              "summary from exactly the payload you sent, so a wrong or misunderstood " +
+              "field (most commonly: dollars instead of cents) is visible there before " +
+              "any human ever sees the request, and a human should never be asked to " +
+              "approve a request you haven't confirmed reads correctly yourself.",
+          ),
         approver_emails: z.array(z.string().email()).min(1)
           .describe("Email address(es) of already-enrolled Human-Attest principals."),
         requested_by: z.string().optional()

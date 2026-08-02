@@ -27,6 +27,26 @@ describe("MCP server: tools/list", () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(["check_approval", "request_approval", "wait_for_approval"]);
   });
+
+  it("request_approval's schema states the wire_transfer amount is in cents, not dollars", async () => {
+    // Regression test for a real defect a live agent hit during manual testing
+    // (2026-08-02): request_approval accepted amount: 47500 (intended as
+    // $47,500.00) with no validation error, silently creating a request for
+    // $475.00 -- the mismatch was visible only in the returned summary, not
+    // caught by any schema check. The fix is documentation, not validation
+    // (there's no way to distinguish "47500 cents" from "47500 meant as
+    // dollars" at the type level), so this test pins the description text
+    // that closes the gap rather than a runtime check.
+    const db = openDb(":memory:");
+    const client = await connectedClient(db);
+    const { tools } = await client.listTools();
+    const requestApproval = tools.find((t) => t.name === "request_approval")!;
+    const typeDescription = (
+      requestApproval.inputSchema.properties as Record<string, { description?: string }>
+    ).type?.description ?? "";
+    expect(typeDescription).toMatch(/cents/i);
+    expect(typeDescription).toContain("not dollars");
+  });
 });
 
 describe("check_approval tool", () => {
