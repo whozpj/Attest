@@ -779,6 +779,57 @@ purged — so the page can show the outcome instead of a dead end.
 
 ---
 
+## MCP server (`/mcp`)
+
+A Model Context Protocol server, mounted at `/mcp` on this same app, exposing
+three tools for any MCP-compatible client (Claude, LangGraph, or anything
+else speaking MCP). Stateless Streamable HTTP transport -- no session
+tracking, no `Mcp-Session-Id` header, `GET /mcp` returns `405`.
+
+Every tool call routes through the exact same validation, hashing,
+rendering, and email-delivery logic `POST /v1/attestations` and
+`GET /v1/attestations/:id` use (`src/api/attestations-core.ts`) -- the MCP
+layer adds a protocol adapter, never a second implementation of anything
+security-relevant. In particular, `request_approval`'s `payload` is
+validated by the exact same closed-world per-type schema as the REST API:
+there is no free-text display field, because what the approver sees is
+always rendered server-side from this same structured payload.
+
+### `request_approval`
+
+| Input | Type | Notes |
+|---|---|---|
+| `type` | `"wire_transfer" \| "send_email" \| "sign_document" \| "generic"` | Same four types as `POST /v1/attestations`. Use `generic` (`{title, detail}`) for anything else. |
+| `risk_tier` | `"low" \| "medium" \| "high" \| "critical"` | |
+| `payload` | object | Fields required depend on `type` -- see `POST /v1/attestations` above. |
+| `approver_emails` | `string[]`, min 1 | Resolved server-side to enrolled `principal_id`s. An address with no enrolled principal is rejected and creates nothing. |
+| `requested_by` | `string`, optional | Defaults to the connecting MCP client's declared name, then `"mcp-client"`. |
+| `required_approvals` | `number`, optional | Defaults to 1. |
+| `ttl_seconds` | `number`, optional | Defaults to 900. |
+
+Returns the same shape as `POST /v1/attestations`'s response body, as
+`structuredContent`.
+
+### `check_approval`
+
+`{ attestation_id: string }` → the same shape `GET /v1/attestations/:id`
+returns, as `structuredContent`. `summary` is `null` once the attestation
+resolves, for the same reason it is on the REST endpoint -- the payload is
+purged.
+
+### `wait_for_approval`
+
+`{ attestation_id: string, timeout_seconds?: number }` (default 300, max
+3600) → `{ status, token, timed_out }`. Polls server-side every second.
+`timed_out: true` with `status: "pending"` is a normal, non-error result --
+call it again, or fall back to `check_approval` later.
+
+Not an MCP tool for this pass: independent, offline verification of a
+returned `token` still goes through `POST /v1/attestations/verify` or the
+JWKS path directly -- see the [quickstart](../integration/quickstart.md).
+
+---
+
 ## Error codes
 
 Every rejection is fail-closed and, on the server, written to the audit log.

@@ -128,6 +128,18 @@ with, click **Approve**, complete the passkey ceremony, and the agent
 verifies the resulting token against the action it originally requested
 before printing `Verified. Executing wire transfer.`
 
+## Call it from an MCP client
+
+The same server also speaks [MCP](https://modelcontextprotocol.io) at
+`/mcp` -- `request_approval`, `check_approval`, `wait_for_approval`. Any
+MCP-compatible agent framework can point at `http://localhost:3000/mcp`
+directly; see `docs/api/reference.md`'s MCP section for the tool schemas, or
+run the reference client:
+
+```bash
+npm run demo:mcp -- <approver_email>
+```
+
 ## Browse your request history
 
 Sign in at `http://localhost:3000/signin` with the email you registered, using
