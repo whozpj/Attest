@@ -136,10 +136,14 @@ describe("verifyAndConsumeAttestation", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("leaves an invalid token's response untouched, without consuming anything", async () => {
+  it("leaves an invalid token's response untouched, without auditing anything", async () => {
     const result = await verifyAndConsumeAttestation(db, await publicJwks(kp), "not-a-jwt");
     expect(result.valid).toBe(false);
     expect(result.reason).toBe("signature_invalid");
+    // A garbage token never reaches consumeAttestationToken at all (there's
+    // no attestation_id to consume against), so nothing gets written here --
+    // unlike the already_consumed case below, which does write a row.
+    expect(db.prepare("SELECT COUNT(*) AS c FROM audit_log").get()).toEqual({ c: 0 });
   });
 
   it("exactly one of two racing calls on the same token wins", async () => {

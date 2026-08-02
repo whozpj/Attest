@@ -35,7 +35,13 @@ honest "not defended" is worth more than a claim that doesn't hold up:
 - **No device-loss recovery.** A principal who loses their authenticator
   has no re-enrolment path today.
 - **`/mcp` requires no caller authentication**, matching `/v1/*`'s existing
-  posture — see `docs/PRODUCTION.md` §5.
+  posture — see `docs/PRODUCTION.md` §5. Since `POST /v1/attestations/verify`
+  and the `consume_approval` MCP tool are single-use, anyone who can reach
+  either endpoint *and* obtain a resolved attestation's token (also
+  unauthenticated, via `GET /v1/attestations/:id`) can permanently deny the
+  legitimate agent's ability to execute a real, human-approved action — not
+  just read it. Put both surfaces behind a real network boundary; see
+  `docs/PRODUCTION.md` §5 for detail.
 - **A small number of MCP-layer rejections aren't audited.** Zod input
   validation failures, unknown tool names, and malformed JSON-RPC envelopes
   are answered by the MCP SDK itself before any application handler runs,

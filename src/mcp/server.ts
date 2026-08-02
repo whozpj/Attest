@@ -234,8 +234,16 @@ export function buildMcpServer(ctx: McpContext): McpServer {
     async (args) => {
       const result = await verifyAndConsumeAttestation(ctx.db, await publicJwks(ctx.kp), args.token);
       if (!result.valid) {
-        const err = new FailClosedError(result.reason ?? "invalid_token", 409, `token invalid: ${result.reason}`);
-        return toolError(ctx.db, err, "consume_approval");
+        // Not routed through toolError: verifyAndConsumeAttestation already
+        // audits the one rejection reason worth auditing here
+        // (already_consumed) itself, shared with the REST /verify route.
+        // Calling toolError on top would write a second, redundant audit
+        // row for the same rejection.
+        return {
+          isError: true as const,
+          content: [{ type: "text" as const, text: `token invalid: ${result.reason}` }],
+          structuredContent: { error: result.reason, message: `token invalid: ${result.reason}` },
+        };
       }
       return {
         content: [{

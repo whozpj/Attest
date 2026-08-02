@@ -385,16 +385,20 @@ describe("consume_approval tool", () => {
     });
   });
 
-  it("audits the already_consumed rejection", async () => {
+  it("audits the already_consumed rejection exactly once, not twice", async () => {
     const token = await approvedToken();
     const client = await connectedClient(db);
     await client.callTool({ name: "consume_approval", arguments: { token } });
     await client.callTool({ name: "consume_approval", arguments: { token } });
 
+    // Exactly one row for this rejection: verifyAndConsumeAttestation
+    // (shared with the REST route) audits it itself, as "token_already_
+    // consumed" -- the tool handler must not also audit it a second time,
+    // under a second event name, on top.
     const rows = db.prepare(
-      "SELECT event FROM audit_log WHERE event = 'token_already_consumed'",
+      "SELECT event FROM audit_log WHERE event LIKE '%consumed%'",
     ).all();
-    expect(rows).toHaveLength(1);
+    expect(rows).toEqual([{ event: "token_already_consumed" }]);
   });
 
   it("fails closed on a garbage token, without throwing", async () => {

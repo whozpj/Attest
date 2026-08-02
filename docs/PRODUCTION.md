@@ -188,11 +188,21 @@ Stated plainly, so it isn't discovered the hard way in an incident:
   deployment does not authenticate the caller of the MCP endpoint itself. Any
   client that can reach `/mcp` can invoke `request_approval`,
   `check_approval`, `wait_for_approval`, and `consume_approval`. Put this
-  endpoint behind the same network boundary you'd put `/v1/*` behind. As
-  with the REST `/verify` endpoint it shares an implementation with,
-  `consume_approval` requires possessing the token itself, not just network
-  reach — the missing caller auth is an existing, already-documented
-  network-exposure concern, not a new hole `consume_approval` introduces.
+  endpoint behind the same network boundary you'd put `/v1/*` behind.
+- **`consume_approval` and `/v1/attestations/verify` add a real denial
+  capability, not just an unauthorized-use one.** `GET /v1/attestations/:id`
+  is also unauthenticated and returns a resolved attestation's `token` to
+  anyone who knows or intercepts its id. Before single-use verification, a
+  stranger with that access could only *read* the token — verifying it
+  changed nothing. Now they can *burn* it: one call to `consume_approval` or
+  `/verify` permanently exhausts the legitimate agent's ability to execute,
+  even though the real approval was genuine and the caller never forged
+  anything. This is the same network-boundary requirement as every other
+  `/v1/*`/`/mcp` endpoint, but the consequence of skipping it is worse for
+  these two specifically: not just unauthorized reads, but the ability to
+  deny a real, human-approved action. Put `/mcp` and `/v1/*` behind a
+  network boundary that only your own agents can reach — this is not
+  optional once this feature is in use.
 
 ## 6. Load characteristics
 

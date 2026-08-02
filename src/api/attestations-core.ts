@@ -122,11 +122,18 @@ export async function verifyAndConsumeAttestation(
   const result = await verifyAttestation(jwks, token);
   if (!result.valid) return result;
 
-  const consumed = q.consumeAttestationToken(db, result.attestation_id!);
+  // A valid token always carries an attestation_id (its jti claim, set by
+  // signAttestation on every token this service issues). This check exists
+  // only so a token that somehow lacks one fails closed instead of
+  // reaching consumeAttestationToken with `undefined`.
+  const attestationId = result.attestation_id;
+  if (!attestationId) return { valid: false, reason: "signature_invalid" };
+
+  const consumed = q.consumeAttestationToken(db, attestationId);
   if (consumed) return result;
 
   q.audit(db, {
-    attestation_id: result.attestation_id ?? null,
+    attestation_id: attestationId,
     event: "token_already_consumed",
     actor: null,
     detail: "verify: token already consumed",

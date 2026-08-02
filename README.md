@@ -190,8 +190,9 @@ before printing `Verified. Executing wire transfer.`
 ## Call it from an MCP client
 
 The same server also speaks [MCP](https://modelcontextprotocol.io) at
-`/mcp` -- `request_approval`, `check_approval`, `wait_for_approval`. Any
-MCP-compatible agent framework can point at `http://localhost:3000/mcp`
+`/mcp` -- `request_approval`, `check_approval`, `wait_for_approval`,
+`consume_approval`. Any MCP-compatible agent framework can point at
+`http://localhost:3000/mcp`
 directly; see `docs/api/reference.md`'s MCP section for the tool schemas, or
 run the reference client:
 
