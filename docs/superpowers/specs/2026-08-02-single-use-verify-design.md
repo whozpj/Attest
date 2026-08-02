@@ -115,3 +115,32 @@ agent (or a second agent, or a retry): consume_approval(token)
   drawn.
 - No change to `check_approval`, `request_approval`, or attestation status
   semantics.
+
+## Post-completion addendum
+
+An independent review (dispatched after the initial implementation landed,
+per this project's standing practice) found one critical gap this design
+missed: `openDb` (`src/db/index.ts`) only ran `CREATE TABLE IF NOT EXISTS`,
+which does nothing to a table that already exists but predates a new
+column. Every real, persistent deployment — the documented Docker-volume
+mode in `docs/PRODUCTION.md` — would have hit `no such column:
+token_consumed_at` on the very first `verify` or `consume_approval` call
+after upgrading: a total outage of the execution gate, on exactly the path
+this feature exists to protect. Confirmed directly against this repo's own
+leftover local `human-attest.db` (4 real rows, column missing) before
+fixing. Fixed by adding a guarded `ALTER TABLE` the first time an existing
+database is opened without the column (`src/db/index.test.ts` covers it
+against a simulated pre-upgrade database).
+
+The same review also caught a real double-audit bug in `consume_approval`
+(the tool routed its `already_consumed` rejection through both
+`verifyAndConsumeAttestation`'s own audit call and `toolError`'s, writing
+two rows under two different event names for one rejection) and correctly
+flagged that this design, by making token possession alone sufficient to
+*destroy* a real approval (not just read it), changes the severity of
+`/mcp` and `/v1/*`'s pre-existing lack of caller authentication — a
+stranger who obtains a resolved attestation's token via the unauthenticated
+`GET /v1/attestations/:id` can now permanently deny the legitimate agent's
+execution, not just observe. `docs/PRODUCTION.md` and `SECURITY.md` were
+corrected to state this plainly rather than downplay it as "not a new
+hole." See commit `dd0ff82` for the full fix set.
