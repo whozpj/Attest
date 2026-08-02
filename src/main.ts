@@ -8,11 +8,11 @@ const app = await buildServer({
     level: config.nodeEnv === "production" ? "info" : "debug",
     // Fastify's default `req` serializer logs req.url INCLUDING the query
     // string. Enrolment tokens (Finding 3 in routes.principals.ts) travel as
-    // ?token=... on .../credentials/options, .../credentials, and
-    // .../push-subscription -- logging them verbatim would leak a live,
-    // unburned enrolment token to anyone with log-read access, letting them
-    // register their own authenticator as that approver. Strip the query
-    // string before it ever reaches the log line.
+    // ?token=... on .../credentials/options and .../credentials --
+    // logging them verbatim would leak a live, unburned enrolment token to
+    // anyone with log-read access, letting them register their own
+    // authenticator as that approver. Strip the query string before it ever
+    // reaches the log line.
     serializers: {
       req: (req) => ({ method: req.method, url: req.url.split("?")[0], remoteAddress: req.ip }),
     },
