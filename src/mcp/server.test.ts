@@ -25,7 +25,7 @@ describe("MCP server: tools/list", () => {
     const db = openDb(":memory:");
     const client = await connectedClient(db);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["check_approval"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["check_approval", "request_approval"]);
   });
 });
 
@@ -64,5 +64,96 @@ describe("check_approval tool", () => {
       arguments: { attestation_id: "att_does_not_exist" },
     });
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("request_approval tool", () => {
+  let db: Database;
+  beforeEach(() => {
+    db = openDb(":memory:");
+    q.insertPrincipal(db, { id: "prin_1", email: "approver@e.com", display_name: "Approver" });
+  });
+
+  it("creates a real, pending attestation and returns its summary", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "wire_transfer", risk_tier: "high",
+        payload: { amount: 2500000, currency: "USD", recipient_name: "Acme Corp", account_last4: "4821" },
+        approver_emails: ["approver@e.com"],
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const structured = result.structuredContent as { attestation_id: string; status: string; summary: { headline: string } };
+    expect(structured.status).toBe("pending");
+    expect(structured.summary.headline).toBe("Wire $25,000.00 USD to Acme Corp");
+
+    const att = q.getAttestation(db, structured.attestation_id);
+    expect(att?.approver_ids).toEqual(["prin_1"]);
+  });
+
+  it("rejects closed, and creates nothing, when an approver email is not enrolled", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" },
+        approver_emails: ["nobody@e.com"],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS c FROM attestations").get()).toEqual({ c: 0 });
+  });
+
+  it("does not accept a caller-supplied display field outside the closed-world action schema", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low",
+        payload: { title: "t", detail: "d", headline: "SPOOFED DISPLAY TEXT" },
+        approver_emails: ["approver@e.com"],
+      },
+    });
+    // validateAction's closed-world check refuses any field outside the
+    // type's schema -- "generic" only allows title/detail. This is the same
+    // guarantee POST /v1/attestations already has; this test proves the MCP
+    // entrypoint didn't quietly bypass it.
+    expect(result.isError).toBe(true);
+  });
+
+  it("defaults requested_by to the connecting client's declared name", async () => {
+    const server = buildMcpServer({ db, email: noopEmail, baseUrl: "http://localhost:3000" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "langgraph", version: "9.9.9" });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" },
+        approver_emails: ["approver@e.com"],
+      },
+    });
+    const structured = result.structuredContent as { attestation_id: string };
+    const action = q.getAction(db, q.getAttestation(db, structured.attestation_id)!.action_id);
+    expect(action?.requested_by).toBe("langgraph");
+  });
+
+  it("an explicit requested_by overrides the client's declared name", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "request_approval",
+      arguments: {
+        type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" },
+        approver_emails: ["approver@e.com"], requested_by: "nightly-deploy-bot",
+      },
+    });
+    const structured = result.structuredContent as { attestation_id: string };
+    const action = q.getAction(db, q.getAttestation(db, structured.attestation_id)!.action_id);
+    expect(action?.requested_by).toBe("nightly-deploy-bot");
   });
 });
