@@ -365,13 +365,15 @@ async function connectedClient(db: Database) {
 }
 
 describe("MCP server: tools/list", () => {
-  it("advertises exactly the three tools this plan builds", async () => {
+  it("advertises exactly check_approval at this stage of the plan", async () => {
+    // Only check_approval exists after this task. request_approval and
+    // wait_for_approval are added by Tasks 3 and 4; the three-tool version of
+    // this assertion belongs to Task 5's real-HTTP test (see below), once all
+    // three exist.
     const db = openDb(":memory:");
     const client = await connectedClient(db);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(
-      ["check_approval", "request_approval", "wait_for_approval"].sort(),
-    );
+    expect(tools.map((t) => t.name).sort()).toEqual(["check_approval"]);
   });
 });
 
