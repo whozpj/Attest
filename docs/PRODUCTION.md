@@ -7,44 +7,50 @@ model, and operational tooling built across this hardening plan
 
 ## 1. Required environment variables
 
-Read by `loadConfig` (`src/config.ts`) and the key-loading functions
-(`src/crypto/tokens.ts`, `src/push/vapid.ts`):
+Read by `loadConfig` (`src/config.ts`) and the key-loading function
+(`src/crypto/tokens.ts`):
 
-| Variable           | What it does                                                                 | Default                  |
-|--------------------|-------------------------------------------------------------------------------|---------------------------|
-| `NODE_ENV`         | `development` \| `production` \| `test`. In `production`, boot fails closed if `RP_ID`/`APP_BASE_URL` still point at `localhost` (see §5). | `development` |
-| `PORT`             | TCP port the HTTP server listens on.                                          | `3000`                    |
-| `HOST`             | Interface to bind. Use `0.0.0.0` inside a container so it's reachable from outside it. | `127.0.0.1`        |
-| `APP_BASE_URL`     | The public HTTPS origin this app is reached at (used to build `approve_url` links, push payloads, and as the default `RP_ORIGIN`). **Not** `BASE_URL` — that name is reserved by Vite/Vitest and gets silently overwritten under the test runner; this app deliberately uses its own name to avoid the collision. | `http://localhost:3000` |
-| `RP_ID`            | WebAuthn Relying Party ID — must be your real domain (e.g. `attest.example.com`), not an IP or `localhost`, for registered credentials to verify in production. | `localhost` |
-| `RP_ORIGIN`        | WebAuthn expected origin. Normally leave unset — it defaults to `APP_BASE_URL`. Only set separately if the RP ID's origin differs from the app's own base URL. | value of `APP_BASE_URL` |
-| `DB_PATH`          | Path to the SQLite database file.                                             | `human-attest.db` (relative to CWD) |
-| `KEY_DIR`          | Directory for on-disk key material (`signing-key.json`, `vapid-keys.json`) when the corresponding `*_JSON` env var isn't set. | `keys` (relative to CWD) |
-| `TRUST_PROXY`      | Set to `true` when deployed behind a single reverse proxy you control, so rate limiting (and any other IP-derived logic) keys on the real client's `X-Forwarded-For` address instead of the proxy's own. See §3's note below before enabling this. | `false` |
-| `SIGNING_KEY_JSON` | *Optional.* JSON blob `{"privateJwk": {...}, "publicJwk": {...}, "kid": "..."}` — injects the ES256 attestation-token signing keypair without touching disk. | unset (falls back to `KEY_DIR/signing-key.json`, generated on first boot) |
-| `VAPID_KEYS_JSON`  | *Optional.* JSON blob `{"publicKey": "...", "privateKey": "..."}` — injects the Web Push VAPID keypair without touching disk. | unset (falls back to `KEY_DIR/vapid-keys.json`, generated on first boot) |
+| Variable              | What it does                                                                 | Default                  |
+|-----------------------|-------------------------------------------------------------------------------|---------------------------|
+| `NODE_ENV`            | `development` \| `production` \| `test`. In `production`, boot fails closed if `RP_ID`/`APP_BASE_URL` still point at `localhost`, or if `SMTP_URL` is unset (see §5). | `development` |
+| `PORT`                | TCP port the HTTP server listens on.                                          | `3000`                    |
+| `HOST`                | Interface to bind. Use `0.0.0.0` inside a container so it's reachable from outside it. | `127.0.0.1`        |
+| `APP_BASE_URL`        | The public HTTPS origin this app is reached at (used to build every link mailed to an approver, and as the default `RP_ORIGIN`). **Not** `BASE_URL` — that name is reserved by Vite/Vitest and gets silently overwritten under the test runner; this app deliberately uses its own name to avoid the collision. | `http://localhost:3000` |
+| `RP_ID`               | WebAuthn Relying Party ID — must be your real domain (e.g. `attest.example.com`), not an IP or `localhost`, for registered credentials to verify in production. | `localhost` |
+| `RP_ORIGIN`           | WebAuthn expected origin. Normally leave unset — it defaults to `APP_BASE_URL`. Only set separately if the RP ID's origin differs from the app's own base URL. | value of `APP_BASE_URL` |
+| `DB_PATH`             | Path to the SQLite database file.                                             | `human-attest.db` (relative to CWD) |
+| `KEY_DIR`             | Directory for on-disk key material (`signing-key.json`) when `SIGNING_KEY_JSON` isn't set. | `keys` (relative to CWD) |
+| `TRUST_PROXY`         | Set to `true` when deployed behind a single reverse proxy you control, so rate limiting (and any other IP-derived logic) keys on the real client's `X-Forwarded-For` address instead of the proxy's own. See §3's note below before enabling this. | `false` |
+| `SIGNING_KEY_JSON`    | *Optional.* JSON blob `{"privateJwk": {...}, "publicJwk": {...}, "kid": "..."}` — injects the ES256 attestation-token signing keypair without touching disk. | unset (falls back to `KEY_DIR/signing-key.json`, generated on first boot) |
+| `SMTP_URL`            | An SMTP connection URL (`smtp://user:pass@host:port`), passed straight to `nodemailer`. **Required in production** — see §5. Unset in any other `NODE_ENV`, every approval and enrolment email is written to `MAIL_DIR` as an `.eml` file instead of sent. | unset |
+| `MAIL_FROM`           | The `From:` address on every outgoing email.                                  | `no-reply@<APP_BASE_URL host>` |
+| `MAIL_DIR`            | Where the file transport writes `.eml` files when `SMTP_URL` is unset. Irrelevant once `SMTP_URL` is set. | `mail` (relative to CWD) |
+| `SESSION_TTL_HOURS`   | How long a dashboard sign-in session (`GET /web/requests` and friends) stays valid. | `168` (one week) |
 
 ## 2. Secrets
 
-Two supported patterns for the signing keypair and VAPID keypair:
+Two supported patterns for the attestation-signing keypair:
 
-- **On-disk files under `KEY_DIR`** (the default). On first boot, if no key
-  file exists, one is generated and written to `KEY_DIR/signing-key.json` and
-  `KEY_DIR/vapid-keys.json` (mode `0600`). Fine for a single trusted host
-  where the volume itself is the secret boundary — this is what
-  `docker-compose.yml`'s named volume does.
-- **`SIGNING_KEY_JSON` / `VAPID_KEYS_JSON` env vars** — the portable pattern
-  for injecting key material from AWS Secrets Manager, HashiCorp Vault, or
-  Kubernetes Secrets. All three of those ultimately expose a secret to a
-  process as an environment variable, which is why this plan didn't build a
-  cloud-provider-specific SDK integration on top — set these two vars from
-  whatever secret store you use, and the app never touches disk for key
-  material. When set, they take priority over `KEY_DIR` unconditionally.
+- **An on-disk file under `KEY_DIR`** (the default). On first boot, if no key
+  file exists, one is generated and written to `KEY_DIR/signing-key.json`
+  (mode `0600`). Fine for a single trusted host where the volume itself is
+  the secret boundary — this is what `docker-compose.yml`'s named volume
+  does.
+- **`SIGNING_KEY_JSON`** — the portable pattern for injecting key material
+  from AWS Secrets Manager, HashiCorp Vault, or Kubernetes Secrets. All three
+  ultimately expose a secret to a process as an environment variable, which
+  is why this plan didn't build a cloud-provider-specific SDK integration on
+  top — set this var from whatever secret store you use, and the app never
+  touches disk for key material. When set, it takes priority over `KEY_DIR`
+  unconditionally.
 
-Either way, **generate these once and keep them** — rotating the signing key
-invalidates every outstanding attestation token, and rotating the VAPID
-keypair invalidates every registered push subscription's ability to verify
-against the old public key.
+Either way, **generate this once and keep it** — rotating the signing key
+invalidates every outstanding attestation token.
+
+`SMTP_URL` is not a secret in the same sense — it's a connection string,
+typically already including credentials in its own userinfo component — but
+it belongs in the same secret store as the two keys above, for the same
+reason: it grants the ability to send mail as this service.
 
 ## 3. Running it
 
@@ -53,29 +59,37 @@ multi-stage `Dockerfile` and runs it with a persistent volume for the
 database and keys:
 
 ```bash
-APP_BASE_URL=https://attest.example.com RP_ID=attest.example.com docker compose up --build
+APP_BASE_URL=https://attest.example.com RP_ID=attest.example.com \
+  SMTP_URL=smtps://user:pass@smtp.example.com:465 \
+  docker compose up --build
 ```
 
-`APP_BASE_URL` and `RP_ID` are required — `docker-compose.yml` uses Compose's
-`${VAR:?message}` syntax so it refuses to start without them, rather than
-silently defaulting to `localhost` and shipping a deployment that can never
-pass a WebAuthn origin check. `docker-compose.yml` already sets
+`APP_BASE_URL`, `RP_ID`, and `SMTP_URL` are all required —
+`docker-compose.yml` uses Compose's `${VAR:?message}` syntax so it refuses to
+start without any of them, rather than silently defaulting to `localhost` (a
+deployment that can never pass a WebAuthn origin check) or silently writing
+approval emails to a directory inside the container that no approver will
+ever see (a deployment where requests just sit pending until they expire,
+with nothing in the logs to say why). `docker-compose.yml` already sets
 `NODE_ENV=production`, `PORT=3000`, `HOST=0.0.0.0`, `DB_PATH=/data/human-attest.db`,
 and `KEY_DIR=/data/keys`, all backed by the single `human-attest-data` named
 volume, so state survives a container recreate.
 
-The image itself is a **two-stage build**, not a simple single-stage one:
+The image builds the React SPA (`web/dist`) in its own stage and copies only
+the built output into the runtime image — `web/src` and the Vite toolchain
+never ship. It is otherwise a **multi-stage build**, not a single-stage one:
 `better-sqlite3`'s native addon needs a compiler toolchain (Python + `make` +
 `g++`) to build from source via node-gyp, and its bundled prebuilt binary can
 be linked against a newer glibc than a slim Debian base actually ships,
 making it silently ABI-incompatible on some hosts. The `deps` build stage
 installs with `--ignore-scripts`, deletes the bundled prebuild, and forces a
 real `node_modules/.bin` node-gyp compile against the toolchain; the final
-stage copies only the resulting `node_modules` (and app source) into a clean
-`node:22-slim` image with no compiler toolchain in it, keeping the runtime
-image slim. There is no separate TypeScript compilation step — the app runs
-directly via `tsx` (`CMD ["npx", "tsx", "src/main.ts"]`) in both stages, so
-"build" here means "compile the one native addon," not "transpile the app."
+stage copies only the resulting `node_modules`, app source, and `web/dist`
+into a clean `node:22-slim` image with no compiler toolchain or Vite in it,
+keeping the runtime image slim. There is no TypeScript compilation step for
+the server — it runs directly via `tsx` (`CMD ["npx", "tsx", "src/main.ts"]`)
+in both stages, so "build" here means "compile the one native addon and
+bundle the SPA," not "transpile the server."
 
 Once it's up, confirm liveness with:
 
@@ -149,20 +163,25 @@ Stated plainly, so it isn't discovered the hard way in an incident:
   proxy.
 - **Horizontal scaling.** Covered in §4 — a single SQLite file means a
   single writer, and this deployment is one app instance against one file.
-- **A compiled build step.** The app runs via `tsx` directly from
-  TypeScript source in both Docker build stages (see §3) — there is no
-  `dist/` or transpiled output to inspect or deploy separately.
+- **A compiled build step for the server.** The Fastify app runs via `tsx`
+  directly from TypeScript source in both Docker build stages (see §3) —
+  there is no `dist/` or transpiled server output to inspect or deploy
+  separately. (The React SPA under `web/` is the exception: it genuinely is
+  built, to `web/dist`, in its own Docker stage — see §3.)
 - **Cloud-provider-specific secrets integration.** The only secrets-injection
-  point is the portable `SIGNING_KEY_JSON` / `VAPID_KEYS_JSON` env-var
-  pattern from §2 — there's no bundled AWS/GCP/Azure SDK client for pulling
-  secrets directly from a provider's secrets manager. Wire that up in
-  whatever wraps this container (an entrypoint script, an init container, an
+  point is the portable `SIGNING_KEY_JSON` env var from §2 (and `SMTP_URL`,
+  which is itself a connection string rather than something to further
+  inject) — there's no bundled AWS/GCP/Azure SDK client for pulling secrets
+  directly from a provider's secrets manager. Wire that up in whatever wraps
+  this container (an entrypoint script, an init container, an
   ECS task definition's `secrets` block, etc.) and pass the result in as
   those two env vars.
 - Failing closed on bad config: a misconfigured `NODE_ENV=production` run
-  still pointed at `localhost` for `RP_ID`/`APP_BASE_URL` refuses to boot at
-  all (see `src/config.ts`'s `loadConfig`) rather than starting and silently
-  failing every WebAuthn ceremony — this is included, not omitted, but is
+  still pointed at `localhost` for `RP_ID`/`APP_BASE_URL`, or with `SMTP_URL`
+  unset, refuses to boot at all (see `src/config.ts`'s `loadConfig`) rather
+  than starting and silently failing every WebAuthn ceremony, or silently
+  writing every approval email to a directory no approver will ever read —
+  this is included, not omitted, but is
   worth calling out here since it's the thing most likely to look like a
   deployment bug on first boot.
 

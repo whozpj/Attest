@@ -238,11 +238,43 @@ for every language (start with a REST API + one client library).
 
 ## 9. Prototype limitations and constraints
 
-This MVP implements real Web Push delivery (VAPID-based) and a browser-installable PWA approval card. However, the following deliberate constraints apply:
+**2026-08-01 update:** this MVP was reworked from Web Push + a PWA + a native
+iOS companion into a plain website: approvers are notified by **email**, and
+review/decide/browse history in a React SPA served by this same Fastify app.
+See `docs/superpowers/specs/2026-08-01-email-link-web-ui-design.md` for the
+full design and rationale. The three constraints below described the prior
+architecture and are retired along with it — kept here, struck through, so
+this section stays a true record of what changed and why, rather than being
+silently rewritten.
 
-- **Web Push subscriptions are time-limited to enrolment.** Real Web Push delivery is now implemented (VAPID, registered at enrolment time only). Push subscriptions are established as part of the credential registration flow and cannot be updated or re-registered later — re-subscribing after device loss or cleared site data is out of scope for this plan. This is deliberate: bundling subscription into the existing token-gated enrolment flow avoids a new standalone unauthenticated endpoint.
-- **No native iOS/Android app.** This is a browser-installable PWA; the WebAuthn/Face-ID mechanism is identical, only packaging differs. A native app would require a build toolchain, device provisioning, and developer accounts not available in this environment.
-- **Push subscriptions cannot be established in ephemeral/headless browser contexts.** Automated testing via Playwright (which uses Chromium's headless mode with ephemeral profiles) cannot establish real push subscriptions — the Push API requires a persistent browser profile. This only affects testing; real users with real persistent browser profiles can subscribe and receive notifications normally. This is a verified constraint of the testing environment, not the production code.
+- ~~**Web Push subscriptions are time-limited to enrolment.**~~ Retired with
+  Web Push itself. There is no subscription to re-establish, because there
+  is no subscription — an email is sent per request, to whatever address the
+  principal registered with, with no persistent client-side state to lose.
+- ~~**No native iOS/Android app.**~~ Retired along with the native iOS
+  companion app that had been built (`ios/`, blocked on a paid Apple
+  Developer account for Associated Domains — see that app's own README in
+  git history at commit `7b7d43f`). The web UI is now the only client; there
+  is no separate app surface to keep in sync with it.
+- ~~**Push subscriptions cannot be established in ephemeral/headless browser
+  contexts.**~~ This was a genuine, verified gap in the previous
+  architecture's testability: the e2e suite could never exercise real push
+  delivery end to end. It is **resolved, not merely retired** — the
+  replacement (a pluggable email transport, `src/email/`, defaulting to
+  writing real `.eml` files to disk in any non-production environment) is
+  itself the thing that makes the notification path testable. The e2e suite
+  now reads the actual email that was actually sent, extracts the actual
+  link, and drives the actual approval flow — no mocking, no environment-
+  specific carve-out required.
+
+Current, still-live limitations, restated from `README.md`: the signing key
+sits on disk unencrypted; there is no device-loss recovery; `SMTP_URL` is
+required to boot with `NODE_ENV=production`, so a deployment can never
+silently fail to notify anyone; and a resolved request's history shows
+metadata only — type, status, timestamps, `payload_hash`, and the audit
+trail, never the original payload text, because the underlying payload is
+purged the moment a result is final (§1's core data-minimization promise,
+unchanged by this rework).
 
 ---
 

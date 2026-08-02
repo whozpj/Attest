@@ -27,24 +27,37 @@ ENROLMENT_TOKEN=$(echo "$CREATED_PRINCIPAL" | jq -r .enrolment_token)
 Hold onto `ENROLMENT_TOKEN` alongside `PRINCIPAL_ID` — it's single-use and
 expires in 15 minutes, and it's what proves the next step is really being
 done by (or for) this principal rather than by anyone who merely learned the
-id. `principal_id` alone is not secret: it turns up in `approve_url`'s query
-string a few steps from now.
+id. `principal_id` alone is not secret: it turns up in this same response's
+enrolment email, and in `approve_url` a few steps from now.
+
+That call also sent an enrolment email to `partner@example.com`. With
+`SMTP_URL` unset (the default outside `NODE_ENV=production`), nothing leaves
+the machine — instead, find the newest file in `mail/`:
+
+```bash
+ENROL_LINK=$(ls -t mail/*.eml | head -1 | xargs grep -o 'http://[^ ]*/enrol[^ "]*')
+echo "$ENROL_LINK"
+```
+
+That link already contains both `PRINCIPAL_ID` and `ENROLMENT_TOKEN` — no
+need to reconstruct it by hand, though you still can (see step 2).
 
 ## 2. Enrol a passkey
 
 This step is not scriptable from a shell — it's a WebAuthn ceremony and
 needs a real (or virtual) authenticator. With a platform authenticator
-available (Touch ID, Windows Hello, or a security key), open:
+available (Touch ID, Windows Hello, or a security key), open the link you
+just extracted from `mail/`, or construct it yourself:
 
 ```
-http://localhost:3000/approve/enrol.html?principal=<PRINCIPAL_ID>&token=<ENROLMENT_TOKEN>
+http://localhost:3000/enrol?principal=<PRINCIPAL_ID>&token=<ENROLMENT_TOKEN>
 ```
 
-substituting both values printed above, and click **Enrol passkey**. The
-page reports `enrolled` on success. Missing the token, or reusing one that's
-already enrolled a credential, fails the same way an unknown principal
-would — there's no separate error to distinguish "wrong token" from
-"principal doesn't exist" (see `docs/api/reference.md`).
+substituting both values printed above, and click **Enrol passkey**. Missing
+the token, or reusing one that's already enrolled a credential, fails the
+same way an unknown principal would — there's no separate error to
+distinguish "wrong token" from "principal doesn't exist" (see
+`docs/api/reference.md`).
 
 ## 3. Create an attestation
 
@@ -78,12 +91,24 @@ APPROVE_URL=$(echo "$CREATED" | jq -r .approve_url)
 step 6. Hold onto it — it is the hash of the *exact* action you asked to be
 authorized.
 
+`APPROVE_URL` points at `/requests/$ATTESTATION_ID` — useful to print or
+log, but it requires the approver to already be signed in (see
+`docs/api/reference.md`'s note on `POST /v1/attestations`). The approver's
+actual, first-contact path is the email this same call sent them, same as
+step 1's enrolment email:
+
+```bash
+sleep 1  # let the fire-and-forget send land
+LINK=$(ls -t mail/*.eml | head -1 | xargs grep -o 'http://[^ ]*/a/[^ "]*')
+echo "$LINK"
+```
+
 ## 4. Approve it
 
-Open `${APPROVE_URL}&principal=${PRINCIPAL_ID}` (substitute the real values)
-in the same browser you enrolled with, and click **Approve**. The headline
-rendered on that page is derived server-side from the payload you sent in
-step 3 — it is what the human actually saw before signing.
+Open the link you just extracted (or `APPROVE_URL`, if you're already signed
+in) in the same browser you enrolled with, and click **Approve**. The
+headline rendered on that page is derived server-side from the payload you
+sent in step 3 — it is what the human actually saw before signing.
 
 ## 5. Poll for resolution
 
