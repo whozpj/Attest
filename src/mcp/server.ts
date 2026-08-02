@@ -12,6 +12,10 @@ export interface McpContext {
   baseUrl: string;
 }
 
+const WAIT_DEFAULT_SECONDS = 300;
+const WAIT_MAX_SECONDS = 3600;
+const WAIT_POLL_MS = 1000;
+
 /**
  * Every tool handler below funnels a FailClosedError into an MCP tool error
  * result (`isError: true`) rather than letting it propagate as a thrown
@@ -133,6 +137,49 @@ export function buildMcpServer(ctx: McpContext): McpServer {
         if (err instanceof FailClosedError) return toolError(err.message);
         throw err;
       }
+    },
+  );
+
+  server.registerTool(
+    "wait_for_approval",
+    {
+      title: "Wait for approval",
+      description:
+        "Polls until the attestation resolves (approved/denied/expired) or the " +
+        "timeout elapses, whichever comes first. Prefer this over repeatedly " +
+        "calling check_approval yourself.",
+      inputSchema: {
+        attestation_id: z.string(),
+        timeout_seconds: z.number().int().min(1).max(WAIT_MAX_SECONDS).optional()
+          .describe(`Defaults to ${WAIT_DEFAULT_SECONDS}. Capped at ${WAIT_MAX_SECONDS}.`),
+      },
+    },
+    async (args) => {
+      const timeoutMs = (args.timeout_seconds ?? WAIT_DEFAULT_SECONDS) * 1000;
+      const deadline = Date.now() + timeoutMs;
+
+      let view;
+      try {
+        view = getAttestationView(ctx.db, args.attestation_id);
+        while (view.status === "pending" && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+          view = getAttestationView(ctx.db, args.attestation_id);
+        }
+      } catch (err) {
+        if (err instanceof FailClosedError) return toolError(err.message);
+        throw err;
+      }
+
+      const timedOut = view.status === "pending";
+      return {
+        content: [{
+          type: "text" as const,
+          text: timedOut
+            ? "Timed out while still pending."
+            : `Resolved: ${view.status}.`,
+        }],
+        structuredContent: { status: view.status, token: view.token, timed_out: timedOut },
+      };
     },
   );
 

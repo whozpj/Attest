@@ -25,7 +25,7 @@ describe("MCP server: tools/list", () => {
     const db = openDb(":memory:");
     const client = await connectedClient(db);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["check_approval", "request_approval"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["check_approval", "request_approval", "wait_for_approval"]);
   });
 });
 
@@ -155,5 +155,82 @@ describe("request_approval tool", () => {
     const structured = result.structuredContent as { attestation_id: string };
     const action = q.getAction(db, q.getAttestation(db, structured.attestation_id)!.action_id);
     expect(action?.requested_by).toBe("nightly-deploy-bot");
+  });
+});
+
+describe("wait_for_approval tool", () => {
+  let db: Database;
+  beforeEach(() => {
+    db = openDb(":memory:");
+    q.insertPrincipal(db, { id: "prin_1", email: "one@e.com", display_name: "One" });
+  });
+
+  it("returns immediately once the attestation is already resolved", async () => {
+    const created = createAttestation(db, noopEmail, "http://localhost:3000", {
+      requested_by: "agent-7", approver_ids: ["prin_1"],
+      action: { type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" } },
+    });
+    q.setAttestationResolved(db, created.attestation_id, "denied", null);
+
+    const client = await connectedClient(db);
+    const started = Date.now();
+    const result = await client.callTool({
+      name: "wait_for_approval",
+      arguments: { attestation_id: created.attestation_id, timeout_seconds: 5 },
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
+
+    const structured = result.structuredContent as { status: string; timed_out: boolean };
+    expect(structured.status).toBe("denied");
+    expect(structured.timed_out).toBe(false);
+  });
+
+  it("times out with status still pending when nobody decides in time", async () => {
+    const created = createAttestation(db, noopEmail, "http://localhost:3000", {
+      requested_by: "agent-7", approver_ids: ["prin_1"],
+      action: { type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" } },
+    });
+
+    const client = await connectedClient(db);
+    const result = await client.callTool({
+      name: "wait_for_approval",
+      arguments: { attestation_id: created.attestation_id, timeout_seconds: 1 },
+    });
+
+    const structured = result.structuredContent as { status: string; timed_out: boolean };
+    expect(structured.status).toBe("pending");
+    expect(structured.timed_out).toBe(true);
+  }, 8000);
+
+  it("picks up a decision recorded while it was waiting", async () => {
+    const created = createAttestation(db, noopEmail, "http://localhost:3000", {
+      requested_by: "agent-7", approver_ids: ["prin_1"],
+      action: { type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" } },
+    });
+
+    const client = await connectedClient(db);
+    setTimeout(() => {
+      q.setAttestationResolved(db, created.attestation_id, "approved", "tok_fake");
+    }, 1200);
+
+    const result = await client.callTool({
+      name: "wait_for_approval",
+      arguments: { attestation_id: created.attestation_id, timeout_seconds: 5 },
+    });
+    const structured = result.structuredContent as { status: string; token: string | null; timed_out: boolean };
+    expect(structured.status).toBe("approved");
+    expect(structured.token).toBe("tok_fake");
+    expect(structured.timed_out).toBe(false);
+  }, 8000);
+
+  it("returns a tool error for an unknown attestation id, without waiting", async () => {
+    const client = await connectedClient(db);
+    const started = Date.now();
+    const result = await client.callTool({
+      name: "wait_for_approval",
+      arguments: { attestation_id: "att_nope", timeout_seconds: 5 },
+    });
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.isError).toBe(true);
   });
 });
