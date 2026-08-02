@@ -16,8 +16,6 @@
   },
   "scripts": {
     "test": "vitest run",
-    "demo": "tsx demo/agent.ts",
-    "demo:mcp": "tsx demo/mcp-agent.ts",
     "dev": "tsx src/main.ts",
     "e2e": "playwright test",
     "build:web": "vite build --config web/vite.config.ts"

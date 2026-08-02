@@ -87,23 +87,14 @@ http://localhost:3000/enrol?principal=<principal_id>&token=<enrolment_token>
 ```
 
 Open that link with a platform authenticator available and click **Enrol
-passkey**. Then run the demo agent:
+passkey**.
 
-```bash
-npm run demo -- <principal_id>
-```
-
-It requests a $25,000 wire transfer, prints a link, and waits. Open the
-approval email or the printed link, approve with your passkey, and the
-agent verifies the resulting token before printing that it executed.
-
-There's an MCP version too, for MCP-compatible agent frameworks, exposing
-`request_approval`, `check_approval`, `wait_for_approval`, and
-`consume_approval`:
-
-```bash
-npm run demo:mcp -- <approver_email>
-```
+From there, an agent requests approval with `POST /v1/attestations`
+(or the MCP equivalent, `request_approval`), polls or waits for a
+decision, and verifies the resulting token before acting on it. See
+`docs/api/reference.md` locally for the full request/response shapes and
+the MCP tool list (`request_approval`, `check_approval`,
+`wait_for_approval`, `consume_approval`).
 
 Sign in at `/signin` with the same email and passkey to browse your
 request history at `/requests`.
