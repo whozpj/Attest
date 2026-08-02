@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { importJWK, jwtVerify } from "jose";
-import { withVirtualAuthenticator, createPrincipal, enrolPasskey } from "./fixtures.js";
+import { withVirtualAuthenticator, createPrincipal, enrolPasskey, waitForApprovalLink, clickDecision } from "./fixtures.js";
 
 const BASE = "http://localhost:3000";
 
@@ -29,10 +29,10 @@ test("quorum genuinely requires two real approvers before a token issues", async
   const page2 = await context.newPage();
   await withVirtualAuthenticator(page2);
 
-  const { principalId: principal1, enrolmentToken: token1 } =
-    await createPrincipal(BASE, `e2e-quorum-1-${Date.now()}@test.local`);
-  const { principalId: principal2, enrolmentToken: token2 } =
-    await createPrincipal(BASE, `e2e-quorum-2-${Date.now()}@test.local`);
+  const email1 = `e2e-quorum-1-${Date.now()}@test.local`;
+  const email2 = `e2e-quorum-2-${Date.now()}@test.local`;
+  const { principalId: principal1, enrolmentToken: token1 } = await createPrincipal(BASE, email1);
+  const { principalId: principal2, enrolmentToken: token2 } = await createPrincipal(BASE, email2);
 
   await enrolPasskey(page, principal1, token1);
   await enrolPasskey(page2, principal2, token2);
@@ -45,22 +45,24 @@ test("quorum genuinely requires two real approvers before a token issues", async
     }),
   }).then((r) => r.json());
 
-  // First approver signs and approves for real. Quorum (2) is not met by one.
-  await page.goto(`/approve/index.html?attestation=${created.attestation_id}&principal=${principal1}`);
-  await page.click("#approve");
-  await expect(page.locator("#status")).toContainText("pending");
+  // First approver signs and approves for real, via their own emailed link.
+  // Quorum (2) is not met by one.
+  await page.goto(await waitForApprovalLink(email1));
+  await clickDecision(page, "Approve with passkey");
+  await expect(page.locator(".pill")).toHaveText("Pending");
 
   let att = await fetch(`${BASE}/v1/attestations/${created.attestation_id}`).then((r) => r.json());
   expect(att.status).toBe("pending");
   expect(att.token).toBeNull();
   expect(att.approvals).toBe(1);
 
-  // Second approver signs and approves for real, with their own credential
-  // and their own challenge (same action, same "approve" decision -- but a
-  // different keypair backing the assertion). Only now is quorum met.
-  await page2.goto(`/approve/index.html?attestation=${created.attestation_id}&principal=${principal2}`);
-  await page2.click("#approve");
-  await expect(page2.locator("#status")).toContainText("approved");
+  // Second approver signs and approves for real, with their own credential,
+  // their own emailed link, and their own challenge (same action, same
+  // "approve" decision -- but a different keypair backing the assertion).
+  // Only now is quorum met.
+  await page2.goto(await waitForApprovalLink(email2));
+  await clickDecision(page2, "Approve with passkey");
+  await expect(page2.locator(".pill")).toHaveText("Approved");
 
   att = await fetch(`${BASE}/v1/attestations/${created.attestation_id}`).then((r) => r.json());
   expect(att.status).toBe("approved");
@@ -93,10 +95,10 @@ test("one real denial beats any number of real approvals", async ({ page, contex
   const page2 = await context.newPage();
   await withVirtualAuthenticator(page2);
 
-  const { principalId: principal1, enrolmentToken: token1 } =
-    await createPrincipal(BASE, `e2e-failclosed-1-${Date.now()}@test.local`);
-  const { principalId: principal2, enrolmentToken: token2 } =
-    await createPrincipal(BASE, `e2e-failclosed-2-${Date.now()}@test.local`);
+  const email1 = `e2e-failclosed-1-${Date.now()}@test.local`;
+  const email2 = `e2e-failclosed-2-${Date.now()}@test.local`;
+  const { principalId: principal1, enrolmentToken: token1 } = await createPrincipal(BASE, email1);
+  const { principalId: principal2, enrolmentToken: token2 } = await createPrincipal(BASE, email2);
 
   await enrolPasskey(page, principal1, token1);
   await enrolPasskey(page2, principal2, token2);
@@ -110,9 +112,9 @@ test("one real denial beats any number of real approvals", async ({ page, contex
   }).then((r) => r.json());
 
   // First approver genuinely approves.
-  await page.goto(`/approve/index.html?attestation=${created.attestation_id}&principal=${principal1}`);
-  await page.click("#approve");
-  await expect(page.locator("#status")).toContainText("pending");
+  await page.goto(await waitForApprovalLink(email1));
+  await clickDecision(page, "Approve with passkey");
+  await expect(page.locator(".pill")).toHaveText("Pending");
 
   let att = await fetch(`${BASE}/v1/attestations/${created.attestation_id}`).then((r) => r.json());
   expect(att.status).toBe("pending");
@@ -121,9 +123,9 @@ test("one real denial beats any number of real approvals", async ({ page, contex
   // Second approver genuinely denies. Deny signs for real now, over a
   // challenge bound to (action, "deny") -- a different challenge than
   // approve's, fetched through the page's own deny button, not hand-rolled.
-  await page2.goto(`/approve/index.html?attestation=${created.attestation_id}&principal=${principal2}`);
-  await page2.click("#deny");
-  await expect(page2.locator("#status")).toContainText("denied");
+  await page2.goto(await waitForApprovalLink(email2));
+  await clickDecision(page2, "Deny");
+  await expect(page2.locator(".pill")).toHaveText("Denied");
 
   // Fail-closed at full strength: one denial resolves the whole attestation,
   // no matter that an approval was already recorded.

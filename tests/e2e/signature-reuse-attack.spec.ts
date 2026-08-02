@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { withVirtualAuthenticator, createPrincipal } from "./fixtures.js";
+import { withVirtualAuthenticator, createPrincipal, enrolPasskey, signDecisionChallenge } from "./fixtures.js";
 
 const BASE = "http://localhost:3000";
 
@@ -11,10 +11,7 @@ const BASE = "http://localhost:3000";
 test("a genuine signature over a benign action cannot approve a different, malicious action", async ({ page }) => {
   await withVirtualAuthenticator(page);
   const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-mismatch-${Date.now()}@test.local`);
-
-  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
-  await page.click("#enrol");
-  await expect(page.locator("#status")).toContainText("enrolled");
+  await enrolPasskey(page, principalId, enrolmentToken);
 
   // Attestation A: benign, $25,000 to Acme Corp.
   const benign = await fetch(`${BASE}/v1/attestations`, {
@@ -44,23 +41,13 @@ test("a genuine signature over a benign action cannot approve a different, malic
   expect(benign.payload_hash).not.toBe(malicious.payload_hash);
 
   // The human genuinely signs A's challenge, from our own origin, with a
-  // real WebAuthn assertion produced by the virtual authenticator.
-  await page.goto(`/approve/index.html?attestation=${benign.attestation_id}&principal=${principalId}`);
-  await expect(page.locator("#headline")).toHaveText("Wire $25,000.00 USD to Acme Corp");
-
-  const response = await page.evaluate(
-    async ({ attestationId, principalId }) => {
-      const optsRes = await fetch(`/v1/attestations/${attestationId}/options`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ principal_id: principalId, decision: "approve" }),
-      });
-      const optionsJSON = await optsRes.json();
-      // Global UMD bundle attached to window by /vendor/simplewebauthn-browser.js.
-      const lib = (window as unknown as { SimpleWebAuthnBrowser: { startAuthentication: (arg: { optionsJSON: unknown }) => Promise<unknown> } }).SimpleWebAuthnBrowser;
-      return lib.startAuthentication({ optionsJSON });
-    },
-    { attestationId: benign.attestation_id, principalId },
-  );
+  // real WebAuthn assertion produced by the virtual authenticator. Any page
+  // on this origin works for this -- the ceremony is driven directly via
+  // signDecisionChallenge, not through the SPA's own Approve button, since
+  // the attack requires submitting the resulting signature against a
+  // *different* attestation than the one it was fetched and signed for.
+  await page.goto("/signin");
+  const response = await signDecisionChallenge(page, BASE, benign.attestation_id, principalId, "approve");
 
   // The attacker tries to spend that genuine, human-signed assertion on the
   // malicious action instead of the one it was actually signed over.

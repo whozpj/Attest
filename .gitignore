@@ -4,6 +4,7 @@ dist/
 keys/
 test-results/
 mail/
+mail-e2e/
 .superpowers/
 
 # Vite build output. Built by `npm run build:web`, by the Dockerfile's

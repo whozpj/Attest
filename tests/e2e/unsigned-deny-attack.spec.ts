@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { withVirtualAuthenticator, createPrincipal } from "./fixtures.js";
+import { withVirtualAuthenticator, createPrincipal, enrolPasskey, signDecisionChallenge } from "./fixtures.js";
 
 const BASE = "http://localhost:3000";
 
@@ -47,10 +47,7 @@ test("a bare, unsigned deny request cannot resolve a pending attestation", async
 test("a genuine approve signature cannot be replayed as a deny on the same action", async ({ page }) => {
   await withVirtualAuthenticator(page);
   const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-decision-swap-${Date.now()}@test.local`);
-
-  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
-  await page.click("#enrol");
-  await expect(page.locator("#status")).toContainText("enrolled");
+  await enrolPasskey(page, principalId, enrolmentToken);
 
   const created = await fetch(`${BASE}/v1/attestations`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -62,19 +59,7 @@ test("a genuine approve signature cannot be replayed as a deny on the same actio
 
   // Genuinely sign the "approve" challenge for this action, from our own
   // origin, with a real assertion from the virtual authenticator.
-  const response = await page.evaluate(
-    async ({ attestationId, principalId }) => {
-      const optsRes = await fetch(`/v1/attestations/${attestationId}/options`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ principal_id: principalId, decision: "approve" }),
-      });
-      const optionsJSON = await optsRes.json();
-      // Global UMD bundle attached to window by /vendor/simplewebauthn-browser.js.
-      const lib = (window as unknown as { SimpleWebAuthnBrowser: { startAuthentication: (arg: { optionsJSON: unknown }) => Promise<unknown> } }).SimpleWebAuthnBrowser;
-      return lib.startAuthentication({ optionsJSON });
-    },
-    { attestationId: created.attestation_id, principalId },
-  );
+  const response = await signDecisionChallenge(page, BASE, created.attestation_id, principalId, "approve");
 
   // Try to spend that genuine approve-signature as a deny instead.
   const decisionRes = await fetch(`${BASE}/v1/attestations/${created.attestation_id}/decision`, {

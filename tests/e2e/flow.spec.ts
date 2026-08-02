@@ -1,16 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { withVirtualAuthenticator, createPrincipal } from "./fixtures.js";
+import { withVirtualAuthenticator, createPrincipal, enrolPasskey, waitForApprovalLink, clickDecision } from "./fixtures.js";
 
 const BASE = "http://localhost:3000";
 
 test("a human approves an action and the token verifies against it", async ({ page }) => {
   await withVirtualAuthenticator(page);
-  const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-${Date.now()}@test.local`);
-
-  // Enrol a passkey through the browser so the credential is real.
-  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
-  await page.click("#enrol");
-  await expect(page.locator("#status")).toContainText("enrolled");
+  const email = `e2e-${Date.now()}@test.local`;
+  const { principalId, enrolmentToken } = await createPrincipal(BASE, email);
+  await enrolPasskey(page, principalId, enrolmentToken);
 
   const created = await fetch(`${BASE}/v1/attestations`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -23,13 +20,16 @@ test("a human approves an action and the token verifies against it", async ({ pa
     }),
   }).then((r) => r.json());
 
-  await page.goto(`/approve/index.html?attestation=${created.attestation_id}&principal=${principalId}`);
+  // The link a real approver would click out of their inbox -- see
+  // email-approval.spec.ts for the version that also drives the enrolment
+  // email; this spec keeps focus on the decision itself.
+  await page.goto(await waitForApprovalLink(email));
 
   // The summary the human sees is rendered server-side from the payload.
-  await expect(page.locator("#headline")).toHaveText("Wire $25,000.00 USD to Acme Corp");
+  await expect(page.locator(".headline")).toHaveText("Wire $25,000.00 USD to Acme Corp");
 
-  await page.click("#approve");
-  await expect(page.locator("#status")).toContainText("approved");
+  await clickDecision(page, "Approve with passkey");
+  await expect(page.locator(".pill")).toHaveText("Approved");
 
   const att = await fetch(`${BASE}/v1/attestations/${created.attestation_id}`).then((r) => r.json());
   const verified = await fetch(`${BASE}/v1/attestations/verify`, {
@@ -43,15 +43,12 @@ test("a human approves an action and the token verifies against it", async ({ pa
 
 test("a denied action issues no token", async ({ page }) => {
   await withVirtualAuthenticator(page);
-  const { principalId, enrolmentToken } = await createPrincipal(BASE, `e2e-deny-${Date.now()}@test.local`);
-
-  await page.goto(`/approve/enrol.html?principal=${principalId}&token=${enrolmentToken}`);
-  await page.click("#enrol");
-  // Deny now requires a real signed assertion, same as approve, so the
-  // credential must genuinely exist server-side before we drive the deny
-  // ceremony -- unlike the old bare-POST deny, this can no longer race past
-  // enrolment finishing.
-  await expect(page.locator("#status")).toContainText("enrolled");
+  const email = `e2e-deny-${Date.now()}@test.local`;
+  const { principalId, enrolmentToken } = await createPrincipal(BASE, email);
+  // Deny requires a real signed assertion, same as approve, so the
+  // credential must genuinely exist server-side before driving the deny
+  // ceremony.
+  await enrolPasskey(page, principalId, enrolmentToken);
 
   const created = await fetch(`${BASE}/v1/attestations`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -61,9 +58,9 @@ test("a denied action issues no token", async ({ page }) => {
     }),
   }).then((r) => r.json());
 
-  await page.goto(`/approve/index.html?attestation=${created.attestation_id}&principal=${principalId}`);
-  await page.click("#deny");
-  await expect(page.locator("#status")).toContainText("denied");
+  await page.goto(await waitForApprovalLink(email));
+  await clickDecision(page, "Deny");
+  await expect(page.locator(".pill")).toHaveText("Denied");
 
   const att = await fetch(`${BASE}/v1/attestations/${created.attestation_id}`).then((r) => r.json());
   expect(att.token).toBeNull();
