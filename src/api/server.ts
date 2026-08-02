@@ -18,6 +18,7 @@ import { registerHealthRoutes } from "./routes.health.js";
 import { registerWebSessionRoutes } from "./routes.web.session.js";
 import { registerWebRequestRoutes } from "./routes.web.requests.js";
 import { loadConfig } from "../config.js";
+import { registerMcpRoutes } from "../mcp/routes.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -233,6 +234,7 @@ export async function buildServer(
   registerWebSessionRoutes(app);
   registerWebRequestRoutes(app);
   registerHealthRoutes(app);
+  await registerMcpRoutes(app);
 
   return app;
 }
