@@ -1,8 +1,8 @@
 // The MCP equivalent of demo/agent.ts: a minimal, real reference client
 // showing how an MCP-compatible agent framework would call this service --
-// request_approval, then wait_for_approval, then verify the token before
-// "executing" anything. Requires the real server running (`npm run dev`)
-// and a principal with an enrolled passkey (see README.md).
+// request_approval, then wait_for_approval, then consume_approval right
+// before "executing" anything. Requires the real server running
+// (`npm run dev`) and a principal with an enrolled passkey (see README.md).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -54,16 +54,22 @@ async function main(): Promise<void> {
     return;
   }
 
-  const verified = await fetch(`${BASE}/v1/attestations/verify`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token: result.token }),
-  }).then((r) => r.json());
+  const consumed = await client.callTool({
+    name: "consume_approval",
+    arguments: { token: result.token },
+  });
+  if (consumed.isError) {
+    console.log("Refusing to execute: could not consume the token.", consumed.structuredContent);
+    return;
+  }
+  const verified = consumed.structuredContent as { valid: boolean; action_hash: string };
 
   if (!verified.valid || verified.action_hash !== requested.payload_hash) {
     console.log("Refusing to execute: token did not verify against this action.");
     return;
   }
-  console.log("Verified. Executing wire transfer.");
+  console.log("Consumed. Executing wire transfer.");
+  console.log("(A second consume_approval call on this same token would now fail with already_consumed.)");
 }
 
 await main();

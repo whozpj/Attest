@@ -94,6 +94,7 @@ export async function verifyAttestation(
       principal_id: payload.sub,
       action_hash: payload.act as string,
       approved_at: new Date((payload.iat ?? 0) * 1000).toISOString(),
+      attestation_id: payload.jti,
     };
   } catch (err) {
     const code = (err as { code?: string }).code;

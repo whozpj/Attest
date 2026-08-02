@@ -481,12 +481,19 @@ ran and failed.
 
 ### `POST /v1/attestations/verify`
 
-Verifies an attestation token against the service's published key. Intended
-for a receiving system (the agent platform itself, in this prototype) to
-check before executing an action — but it can equally be done fully offline
-using [`/.well-known/jwks.json`](#get-well-knownjwksjson) and a JWT library,
-without calling this endpoint at all. See the
-[quickstart](../integration/quickstart.md) for that path.
+Verifies an attestation token against the service's published key, **and
+consumes it**: the first successful call claims the token's one and only
+execution. Call this immediately before performing the real action, not
+before -- it is the actual enforcement point that stops one human approval
+from authorizing two executions.
+
+This is different from checking a token's authenticity offline (see
+[`/.well-known/jwks.json`](#get-well-knownjwksjson) and the
+[quickstart](../integration/quickstart.md)): decoding and checking the
+signature yourself proves the token is real, but has no way to claim it, so
+it gives no single-use guarantee. Only a real call to this endpoint (or the
+`/mcp` server's equivalent [`consume_approval`](#consume_approval) tool)
+does.
 
 **Request body**
 
@@ -501,21 +508,28 @@ without calling this endpoint at all. See the
   "valid": true,
   "principal_id": "prin_abc123",
   "action_hash": "sha256:<hex>",
-  "approved_at": "2026-07-26T18:03:11.000Z"
+  "approved_at": "2026-07-26T18:03:11.000Z",
+  "attestation_id": "att_abc123"
 }
 ```
 
-or, for an invalid token:
+or, for an invalid or already-used token:
 
 ```json
 { "valid": false, "reason": "signature_invalid" }
 ```
 
-**This endpoint never returns a non-2xx status for an invalid or expired
-token.** `valid: false` with a `reason` (`signature_invalid` or `expired`) is
-the correct, complete answer — a verifier truthfully reporting "no" is not an
-error condition, and treating it as one is a caller bug. Always check the
-`valid` field; do not branch on HTTP status.
+**This endpoint never returns a non-2xx status for an invalid, expired, or
+already-consumed token.** `valid: false` with a `reason`
+(`signature_invalid`, `expired`, or `already_consumed`) is the correct,
+complete answer — a verifier truthfully reporting "no" is not an error
+condition, and treating it as one is a caller bug. Always check the `valid`
+field; do not branch on HTTP status. A caller that calls `verify` more than
+once for the same token by mistake (e.g. a naive retry) will see
+`already_consumed` on every call after the first, indistinguishable from a
+second caller trying to claim the same approval -- by design, since the
+whole point is that nothing downstream can tell those two cases apart
+either.
 
 **Status codes**
 
@@ -793,7 +807,7 @@ purged — so the page can show the outcome instead of a dead end.
 ## MCP server (`/mcp`)
 
 A Model Context Protocol server, mounted at `/mcp` on this same app, exposing
-three tools for any MCP-compatible client (Claude, LangGraph, or anything
+four tools for any MCP-compatible client (Claude, LangGraph, or anything
 else speaking MCP). Stateless Streamable HTTP transport -- no session
 tracking, no `Mcp-Session-Id` header, `GET /mcp` returns `405`.
 
@@ -835,9 +849,25 @@ purged.
 `timed_out: true` with `status: "pending"` is a normal, non-error result --
 call it again, or fall back to `check_approval` later.
 
-Not an MCP tool for this pass: independent, offline verification of a
-returned `token` still goes through `POST /v1/attestations/verify` or the
-JWKS path directly -- see the [quickstart](../integration/quickstart.md).
+### `consume_approval`
+
+`{ token: string }` → the same result shape as
+[`POST /v1/attestations/verify`](#post-v1attestationsverify), as
+`structuredContent` on success, or a tool error (same shape as every other
+tool's -- `{ error: "<code>", message: "<text>" }` in `structuredContent`)
+when the token is invalid or already consumed.
+
+This is the actual execution gate, and it is single-use: call it
+immediately before performing the real action, using the `token` returned
+by `wait_for_approval` or `check_approval`. The first successful call
+consumes the token; every call after that -- a retry, a second agent, the
+same agent twice -- fails closed with `already_consumed`, even though the
+token is still cryptographically valid. `check_approval` reports status and
+can be called any number of times; `consume_approval` cannot, by design --
+that is what actually stops one human approval from authorizing two
+executions. See
+[`docs/superpowers/specs/2026-08-02-single-use-verify-design.md`](../superpowers/specs/2026-08-02-single-use-verify-design.md)
+for the full design.
 
 ---
 
@@ -860,7 +890,12 @@ stable across endpoints:
 
 **`POST /v1/attestations/verify` is the deliberate exception to this table.**
 It returns `200` with `{ "valid": false, "reason": ... }` rather than any of
-the above statuses — see that endpoint's section.
+the above statuses — see that endpoint's section. `reason: "already_consumed"`
+is the one case there with no HTTP-status analogue at all: the token is
+completely valid, it has simply already been spent. The `/mcp` server's
+`consume_approval` tool surfaces the same condition as a tool error with
+`error: "already_consumed"`, since MCP has no HTTP status of its own to
+carry it.
 
 A few additional codes appear in specific routes and are not part of the
 stable table above, because they concern registration and lookup rather than

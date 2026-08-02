@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openDb, type Database } from "../db/index.js";
 import * as q from "../db/queries.js";
-import { createAttestation, getAttestationView } from "./attestations-core.js";
+import { createAttestation, getAttestationView, verifyAndConsumeAttestation } from "./attestations-core.js";
+import { loadOrCreateKeypair, signAttestation, publicJwks, type Keypair } from "../crypto/tokens.js";
 import { FailClosedError } from "../types.js";
 import type { EmailTransport, EmailMessage } from "../email/index.js";
 
@@ -82,5 +86,70 @@ describe("getAttestationView", () => {
     } catch (err) {
       expect((err as FailClosedError).code).toBe("unknown_attestation");
     }
+  });
+});
+
+describe("verifyAndConsumeAttestation", () => {
+  let db: Database;
+  let kp: Keypair;
+
+  beforeAll(async () => {
+    kp = await loadOrCreateKeypair(mkdtempSync(join(tmpdir(), "ha-verify-")));
+  });
+
+  beforeEach(async () => {
+    db = openDb(":memory:");
+    q.insertPrincipal(db, { id: "prin_1", email: "one@e.com", display_name: "One" });
+  });
+
+  async function approvedToken() {
+    const created = createAttestation(db, recorder(), "http://localhost:3000", wireInput);
+    const token = await signAttestation(kp, {
+      jti: created.attestation_id, sub: "prin_1", act: created.payload_hash,
+      approvers: ["prin_1"], mth: "passkey",
+    }, 300);
+    q.setAttestationResolved(db, created.attestation_id, "approved", token);
+    return { attestationId: created.attestation_id, token };
+  }
+
+  it("consumes a valid token on the first call", async () => {
+    const { token } = await approvedToken();
+    const result = await verifyAndConsumeAttestation(db, await publicJwks(kp), token);
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects a second call on the same token as already_consumed", async () => {
+    const { token } = await approvedToken();
+    await verifyAndConsumeAttestation(db, await publicJwks(kp), token);
+    const second = await verifyAndConsumeAttestation(db, await publicJwks(kp), token);
+    expect(second.valid).toBe(false);
+    expect(second.reason).toBe("already_consumed");
+  });
+
+  it("audits the already_consumed rejection", async () => {
+    const { attestationId, token } = await approvedToken();
+    await verifyAndConsumeAttestation(db, await publicJwks(kp), token);
+    await verifyAndConsumeAttestation(db, await publicJwks(kp), token);
+    const rows = db.prepare(
+      `SELECT * FROM audit_log WHERE attestation_id = ? AND event = 'token_already_consumed'`,
+    ).all(attestationId);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("leaves an invalid token's response untouched, without consuming anything", async () => {
+    const result = await verifyAndConsumeAttestation(db, await publicJwks(kp), "not-a-jwt");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it("exactly one of two racing calls on the same token wins", async () => {
+    const { token } = await approvedToken();
+    const jwks = await publicJwks(kp);
+    const [a, b] = await Promise.all([
+      verifyAndConsumeAttestation(db, jwks, token),
+      verifyAndConsumeAttestation(db, jwks, token),
+    ]);
+    const validCount = [a, b].filter((r) => r.valid).length;
+    expect(validCount).toBe(1);
   });
 });

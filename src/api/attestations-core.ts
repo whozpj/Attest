@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
+import type { JWK } from "jose";
 import * as q from "../db/queries.js";
 import { prepareAction, renderSummary } from "../actions/render.js";
 import { validateEnvelope } from "../actions/schemas.js";
 import { effectiveStatus } from "./state.js";
 import { emailApprovers } from "./notify.js";
-import { FailClosedError, type AttestationStatus, type RenderedSummary } from "../types.js";
+import { verifyAttestation } from "../crypto/tokens.js";
+import { FailClosedError, type AttestationStatus, type RenderedSummary, type VerifyResult } from "../types.js";
 import type { EmailTransport } from "../email/index.js";
 
 export interface CreateAttestationResult {
@@ -103,4 +105,31 @@ export function getAttestationView(db: Database, id: string): AttestationView {
       : null,
     token: att.token,
   };
+}
+
+/**
+ * Shared by POST /v1/attestations/verify and the consume_approval MCP tool.
+ *
+ * First checks the token's signature and expiry (unchanged from before this
+ * function existed). If that passes, it then atomically claims a single
+ * execution against the token. That second step is what actually stops one
+ * human approval from authorizing two executions: a second call with the
+ * exact same, still-perfectly-valid token comes back `already_consumed`.
+ */
+export async function verifyAndConsumeAttestation(
+  db: Database, jwks: { keys: JWK[] }, token: string,
+): Promise<VerifyResult> {
+  const result = await verifyAttestation(jwks, token);
+  if (!result.valid) return result;
+
+  const consumed = q.consumeAttestationToken(db, result.attestation_id!);
+  if (consumed) return result;
+
+  q.audit(db, {
+    attestation_id: result.attestation_id ?? null,
+    event: "token_already_consumed",
+    actor: null,
+    detail: "verify: token already consumed",
+  });
+  return { valid: false, reason: "already_consumed" };
 }

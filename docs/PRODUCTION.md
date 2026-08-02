@@ -187,8 +187,12 @@ Stated plainly, so it isn't discovered the hard way in an incident:
 - **Caller authentication on `/mcp`.** Same posture as `/v1/*`: this
   deployment does not authenticate the caller of the MCP endpoint itself. Any
   client that can reach `/mcp` can invoke `request_approval`,
-  `check_approval`, and `wait_for_approval`. Put this endpoint behind the
-  same network boundary you'd put `/v1/*` behind.
+  `check_approval`, `wait_for_approval`, and `consume_approval`. Put this
+  endpoint behind the same network boundary you'd put `/v1/*` behind. As
+  with the REST `/verify` endpoint it shares an implementation with,
+  `consume_approval` requires possessing the token itself, not just network
+  reach — the missing caller auth is an existing, already-documented
+  network-exposure concern, not a new hole `consume_approval` introduces.
 
 ## 6. Load characteristics
 
@@ -234,7 +238,8 @@ space runs out across multiple windows to test higher totals.
 This math is REST-only and doesn't cover `/mcp`, which draws from the same
 global bucket but with a different shape: an MCP client's `connect()` and
 each subsequent tool call (`request_approval`, `check_approval`,
-`wait_for_approval`) each cost some number of requests against `POST /mcp`,
+`wait_for_approval`, `consume_approval`) each cost some number of requests
+against `POST /mcp`,
 so an MCP-heavy integration doesn't map cleanly onto the "2 requests per
 attestation" figure above. `wait_for_approval` in particular holds its
 underlying HTTP connection open for as long as it polls (up to its timeout),

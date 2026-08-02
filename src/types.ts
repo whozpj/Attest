@@ -47,6 +47,7 @@ export interface VerifyResult {
   principal_id?: string;
   action_hash?: string;
   approved_at?: string;
+  attestation_id?: string;
 }
 
 export class FailClosedError extends Error {

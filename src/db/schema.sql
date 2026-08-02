@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS attestations (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   resolved_at TEXT,
-  token TEXT
+  token TEXT,
+  token_consumed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS attestation_approvals (

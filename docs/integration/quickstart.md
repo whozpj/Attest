@@ -167,13 +167,29 @@ you. **Skipping this comparison — accepting any token with `valid: true`
 regardless of which action it names — voids the guarantee this service
 exists to provide.**
 
-## Equivalent: calling `/verify` instead
+## Not equivalent: calling `/verify` instead
 
 `POST /v1/attestations/verify` performs the same signature and expiry check
 server-side and returns `{ "valid": true, "action_hash": "...", ... }` or
-`{ "valid": false, "reason": "..." }` — always with HTTP `200`. It is
-convenient, but it is not "offline": it requires trusting this service to be
-reachable and honest at verify time. The offline path in step 6 above needs
-only the JWKS, which you can cache. Either way, the hard requirement in step
-6 still applies: check `action_hash` (or `act`) against the specific action
-you are about to execute, not just `valid`.
+`{ "valid": false, "reason": "..." }` — always with HTTP `200`. Unlike the
+offline path in step 6, it requires trusting this service to be reachable
+at verify time — but it does something the offline path structurally
+cannot: it **consumes** the token. The first successful call to `/verify`
+claims the token's one and only execution; every call after that, for the
+same token, comes back `{ "valid": false, "reason": "already_consumed" }`,
+even though the token itself is still perfectly valid.
+
+This is the real difference between the two paths, not just a convenience
+trade-off. Decoding and checking the signature yourself (step 6, or any
+JWT library against the published JWKS) proves the token is *authentic* —
+that some human really did approve this exact action through this service.
+It cannot prove the token hasn't *already been spent*, because there is no
+server round-trip in that path for anything to be spent through. If your
+integration's threat model includes "the same approval gets used to
+authorize two executions" (a retry, a second worker picking up the same
+job, a compromised caller replaying a captured token) — not just "is this
+token real" — you must call `/verify` (or the `/mcp` server's
+`consume_approval` tool) as the actual execution gate, immediately before
+performing the action. Either way, the hard requirement in step 6 still
+applies: check `action_hash` (or `act`) against the specific action you are
+about to execute, not just `valid`.

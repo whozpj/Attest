@@ -86,7 +86,7 @@ export function getAttestation(db: Database, id: string) {
   const row = db.prepare(`SELECT * FROM attestations WHERE id = ?`).get(id) as
     | { id: string; action_id: string; status: AttestationStatus; required_approvals: number;
         approver_ids: string; expires_at: string; created_at: string;
-        resolved_at: string | null; token: string | null }
+        resolved_at: string | null; token: string | null; token_consumed_at: string | null }
     | undefined;
   return row ? { ...row, approver_ids: JSON.parse(row.approver_ids) as string[] } : undefined;
 }
@@ -133,6 +133,20 @@ export function setAttestationResolved(
 ): void {
   db.prepare(`UPDATE attestations SET status = ?, resolved_at = ?, token = ? WHERE id = ?`)
     .run(status, now(), token, id);
+}
+
+/**
+ * Atomic check-and-burn in one statement, mirroring consumeEnrolmentToken
+ * and consumeLoginChallenge: two calls racing to consume the same
+ * attestation's token cannot both win. Returns whether *this* call is the
+ * one that consumed it — an unknown id and an already-consumed one both
+ * resolve to `false` the same way.
+ */
+export function consumeAttestationToken(db: Database, attestationId: string): boolean {
+  const result = db.prepare(
+    `UPDATE attestations SET token_consumed_at = ? WHERE id = ? AND token_consumed_at IS NULL`,
+  ).run(now(), attestationId);
+  return result.changes === 1;
 }
 
 export function insertEnrolmentToken(

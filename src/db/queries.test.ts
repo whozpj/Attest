@@ -156,4 +156,14 @@ describe("approvals", () => {
     const approvals = q.getApprovals(db, "att_1");
     expect(approvals.map((a) => a.principal_id)).toEqual(["prin_2", "prin_1"]);
   });
+
+  it("consumeAttestationToken succeeds exactly once", () => {
+    expect(q.consumeAttestationToken(db, "att_1")).toBe(true);
+    // Single-use: a second attempt on the same attestation fails.
+    expect(q.consumeAttestationToken(db, "att_1")).toBe(false);
+  });
+
+  it("consumeAttestationToken fails for an unknown attestation id", () => {
+    expect(q.consumeAttestationToken(db, "att_never_issued")).toBe(false);
+  });
 });

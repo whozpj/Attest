@@ -23,7 +23,9 @@ import * as q from "../db/queries.js";
  */
 export async function registerMcpRoutes(app: FastifyInstance & { ctx: AppContext }): Promise<void> {
   app.post("/mcp", async (req, reply) => {
-    const mcpServer = buildMcpServer({ db: app.ctx.db, email: app.ctx.email, baseUrl: app.ctx.baseUrl });
+    const mcpServer = buildMcpServer({
+      db: app.ctx.db, email: app.ctx.email, baseUrl: app.ctx.baseUrl, kp: app.ctx.kp,
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
     // Hand the raw Node request/response to the transport and tell Fastify

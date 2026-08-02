@@ -27,11 +27,11 @@ async function connectRealClient() {
 }
 
 describe("POST /mcp over a real HTTP server", () => {
-  it("lists the three tools through a real Streamable HTTP round trip", async () => {
+  it("lists the four tools through a real Streamable HTTP round trip", async () => {
     const client = await connectRealClient();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ["check_approval", "request_approval", "wait_for_approval"].sort(),
+      ["check_approval", "consume_approval", "request_approval", "wait_for_approval"].sort(),
     );
   });
 

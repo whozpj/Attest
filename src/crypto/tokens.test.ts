@@ -28,6 +28,7 @@ describe("attestation tokens", () => {
     expect(result.valid).toBe(true);
     expect(result.action_hash).toBe(claims.act);
     expect(result.principal_id).toBe("prin_1");
+    expect(result.attestation_id).toBe("att_1");
   });
 
   it("rejects a token signed by a different key", async () => {

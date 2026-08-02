@@ -1,16 +1,25 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { openDb, type Database } from "../db/index.js";
 import * as q from "../db/queries.js";
 import { createAttestation } from "../api/attestations-core.js";
 import { buildMcpServer } from "./server.js";
+import { loadOrCreateKeypair, signAttestation, type Keypair } from "../crypto/tokens.js";
 import type { EmailTransport } from "../email/index.js";
 
 const noopEmail: EmailTransport = { async send() {} };
 
+let kp: Keypair;
+beforeAll(async () => {
+  kp = await loadOrCreateKeypair(mkdtempSync(join(tmpdir(), "ha-mcp-")));
+});
+
 async function connectedClient(db: Database) {
-  const server = buildMcpServer({ db, email: noopEmail, baseUrl: "http://localhost:3000" });
+  const server = buildMcpServer({ db, email: noopEmail, baseUrl: "http://localhost:3000", kp });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });
   await Promise.all([
@@ -21,11 +30,13 @@ async function connectedClient(db: Database) {
 }
 
 describe("MCP server: tools/list", () => {
-  it("advertises exactly the three tools this plan builds", async () => {
+  it("advertises exactly the four tools this server builds", async () => {
     const db = openDb(":memory:");
     const client = await connectedClient(db);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["check_approval", "request_approval", "wait_for_approval"]);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "check_approval", "consume_approval", "request_approval", "wait_for_approval",
+    ]);
   });
 
   it("request_approval's schema states the wire_transfer amount is in cents, not dollars", async () => {
@@ -210,7 +221,7 @@ describe("request_approval tool", () => {
   });
 
   it("defaults requested_by to the connecting client's declared name", async () => {
-    const server = buildMcpServer({ db, email: noopEmail, baseUrl: "http://localhost:3000" });
+    const server = buildMcpServer({ db, email: noopEmail, baseUrl: "http://localhost:3000", kp });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "langgraph", version: "9.9.9" });
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
@@ -331,5 +342,64 @@ describe("wait_for_approval tool", () => {
       { event: string; detail: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].detail).toBe("wait_for_approval: unknown attestation");
+  });
+});
+
+describe("consume_approval tool", () => {
+  let db: Database;
+  beforeEach(() => {
+    db = openDb(":memory:");
+    q.insertPrincipal(db, { id: "prin_1", email: "one@e.com", display_name: "One" });
+  });
+
+  async function approvedToken() {
+    const created = createAttestation(db, noopEmail, "http://localhost:3000", {
+      requested_by: "agent-7", approver_ids: ["prin_1"],
+      action: { type: "generic", risk_tier: "low", payload: { title: "t", detail: "d" } },
+    });
+    const token = await signAttestation(kp, {
+      jti: created.attestation_id, sub: "prin_1", act: created.payload_hash,
+      approvers: ["prin_1"], mth: "passkey",
+    }, 300);
+    q.setAttestationResolved(db, created.attestation_id, "approved", token);
+    return token;
+  }
+
+  it("consumes a valid token on the first call", async () => {
+    const token = await approvedToken();
+    const client = await connectedClient(db);
+    const result = await client.callTool({ name: "consume_approval", arguments: { token } });
+    expect(result.isError).not.toBe(true);
+    expect((result.structuredContent as { valid: boolean }).valid).toBe(true);
+  });
+
+  it("fails closed on a second call with the same token", async () => {
+    const token = await approvedToken();
+    const client = await connectedClient(db);
+    await client.callTool({ name: "consume_approval", arguments: { token } });
+    const second = await client.callTool({ name: "consume_approval", arguments: { token } });
+    expect(second.isError).toBe(true);
+    expect(second.structuredContent).toEqual({
+      error: "already_consumed",
+      message: "token invalid: already_consumed",
+    });
+  });
+
+  it("audits the already_consumed rejection", async () => {
+    const token = await approvedToken();
+    const client = await connectedClient(db);
+    await client.callTool({ name: "consume_approval", arguments: { token } });
+    await client.callTool({ name: "consume_approval", arguments: { token } });
+
+    const rows = db.prepare(
+      "SELECT event FROM audit_log WHERE event = 'token_already_consumed'",
+    ).all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("fails closed on a garbage token, without throwing", async () => {
+    const client = await connectedClient(db);
+    const result = await client.callTool({ name: "consume_approval", arguments: { token: "not-a-jwt" } });
+    expect(result.isError).toBe(true);
   });
 });

@@ -74,7 +74,14 @@ the specific action, not just "a human was present." The service issues an
 ES256 JWS whose `act` claim carries the plain action hash, signed with a key
 whose public half is published at `/.well-known/jwks.json`. Anyone holding
 the token can verify it offline against that key, without calling back to
-this service.
+this service — but offline verification only proves the token is authentic,
+not that it hasn't already been used. `POST /v1/attestations/verify` is
+single-use: the first successful call consumes the token, and every call
+after that fails closed with `already_consumed`, even though the token
+itself is still cryptographically valid. A caller that wants to gate a real
+execution — not just check authenticity — must call `verify` (or the `/mcp`
+server's equivalent `consume_approval` tool), not just decode the JWT
+itself.
 
 What this does **not** prove: that the human read or understood the summary.
 WebAuthn signs opaque bytes; it cannot show transaction text on the

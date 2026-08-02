@@ -1,7 +1,8 @@
 import type { Database } from "better-sqlite3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createAttestation, getAttestationView } from "../api/attestations-core.js";
+import { createAttestation, getAttestationView, verifyAndConsumeAttestation } from "../api/attestations-core.js";
+import { publicJwks, type Keypair } from "../crypto/tokens.js";
 import * as q from "../db/queries.js";
 import { FailClosedError } from "../types.js";
 import type { EmailTransport } from "../email/index.js";
@@ -10,6 +11,7 @@ export interface McpContext {
   db: Database;
   email: EmailTransport;
   baseUrl: string;
+  kp: Keypair;
 }
 
 const WAIT_DEFAULT_SECONDS = 300;
@@ -209,6 +211,38 @@ export function buildMcpServer(ctx: McpContext): McpServer {
             : `Resolved: ${view.status}.`,
         }],
         structuredContent: { status: view.status, token: view.token, timed_out: timedOut },
+      };
+    },
+  );
+
+  server.registerTool(
+    "consume_approval",
+    {
+      title: "Consume an approval token",
+      description:
+        "Claims a single execution against an approved token -- call this " +
+        "right before performing the real action, not before. The first " +
+        "successful call succeeds; every call after that fails closed with " +
+        "'already_consumed', even though the token itself is still " +
+        "cryptographically valid. Use this, not check_approval, as the " +
+        "actual execution gate: check_approval only reports status and can " +
+        "be called any number of times.",
+      inputSchema: {
+        token: z.string().describe("The token returned by wait_for_approval or check_approval."),
+      },
+    },
+    async (args) => {
+      const result = await verifyAndConsumeAttestation(ctx.db, await publicJwks(ctx.kp), args.token);
+      if (!result.valid) {
+        const err = new FailClosedError(result.reason ?? "invalid_token", 409, `token invalid: ${result.reason}`);
+        return toolError(ctx.db, err, "consume_approval");
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Consumed. attestation_id=${result.attestation_id}`,
+        }],
+        structuredContent: result as unknown as Record<string, unknown>,
       };
     },
   );
