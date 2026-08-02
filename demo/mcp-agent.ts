@@ -29,7 +29,9 @@ async function main(): Promise<void> {
     console.error("request_approval failed:", created.content);
     process.exit(1);
   }
-  const requested = created.structuredContent as { attestation_id: string; summary: { headline: string } };
+  const requested = created.structuredContent as {
+    attestation_id: string; payload_hash: string; summary: { headline: string };
+  };
   console.log(`  ${requested.summary.headline}`);
   console.log(`  An approval email has been sent to ${approverEmail}. Waiting for a decision (up to 15 minutes)...\n`);
 
@@ -37,6 +39,10 @@ async function main(): Promise<void> {
     name: "wait_for_approval",
     arguments: { attestation_id: requested.attestation_id, timeout_seconds: 900 },
   });
+  if (waited.isError) {
+    console.error("wait_for_approval failed:", waited.content);
+    process.exit(1);
+  }
   const result = waited.structuredContent as { status: string; token: string | null; timed_out: boolean };
 
   if (result.timed_out) {
@@ -53,8 +59,8 @@ async function main(): Promise<void> {
     body: JSON.stringify({ token: result.token }),
   }).then((r) => r.json());
 
-  if (!verified.valid) {
-    console.log("Refusing to execute: token did not verify.");
+  if (!verified.valid || verified.action_hash !== requested.payload_hash) {
+    console.log("Refusing to execute: token did not verify against this action.");
     return;
   }
   console.log("Verified. Executing wire transfer.");
