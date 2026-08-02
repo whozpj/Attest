@@ -1381,6 +1381,19 @@ git commit -m "test(e2e): full MCP request_approval -> real email approval -> wa
 
 - [ ] **Step 1: Write `demo/mcp-agent.ts`**
 
+**Corrected after Task 8's review**: the original version of this file
+omitted the `action_hash`/`payload_hash` comparison `demo/agent.ts:41`
+performs before trusting a token — checking only `!verified.valid`, never
+that the verified token actually names *this* action. That defeats the
+entire point of a reference client whose stated purpose is proving the
+correct verification pattern to integrators: a token issued for a different
+action would still "verify," and the demo would wrongly print "Verified.
+Executing wire transfer." The version below captures `payload_hash` from
+`request_approval`'s response and checks it against `verify`'s
+`action_hash`, exactly like `demo/agent.ts` already does — this is not a new
+requirement, it is restoring a check the sibling reference client already
+has correctly.
+
 ```ts
 // The MCP equivalent of demo/agent.ts: a minimal, real reference client
 // showing how an MCP-compatible agent framework would call this service --
@@ -1413,7 +1426,9 @@ async function main(): Promise<void> {
     console.error("request_approval failed:", created.content);
     process.exit(1);
   }
-  const requested = created.structuredContent as { attestation_id: string; summary: { headline: string } };
+  const requested = created.structuredContent as {
+    attestation_id: string; payload_hash: string; summary: { headline: string };
+  };
   console.log(`  ${requested.summary.headline}`);
   console.log(`  An approval email has been sent to ${approverEmail}. Waiting for a decision (up to 15 minutes)...\n`);
 
@@ -1437,8 +1452,8 @@ async function main(): Promise<void> {
     body: JSON.stringify({ token: result.token }),
   }).then((r) => r.json());
 
-  if (!verified.valid) {
-    console.log("Refusing to execute: token did not verify.");
+  if (!verified.valid || verified.action_hash !== requested.payload_hash) {
+    console.log("Refusing to execute: token did not verify against this action.");
     return;
   }
   console.log("Verified. Executing wire transfer.");
