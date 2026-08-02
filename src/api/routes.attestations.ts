@@ -1,13 +1,10 @@
-import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "./server.js";
 import * as q from "../db/queries.js";
-import { prepareAction, renderSummary } from "../actions/render.js";
-import { validateEnvelope } from "../actions/schemas.js";
+import { createAttestation, getAttestationView } from "./attestations-core.js";
 import { beginApproval, finishApproval } from "../webauthn/authentication.js";
 import { effectiveStatus, recordDecision } from "./state.js";
 import { FailClosedError, type Decision } from "../types.js";
-import { emailApprovers } from "./notify.js";
 
 function assertDecision(decision: unknown): asserts decision is Decision {
   if (decision !== "approve" && decision !== "deny") {
@@ -51,81 +48,13 @@ export function registerAttestationRoutes(app: FastifyInstance & { ctx: AppConte
   const { db } = app.ctx;
 
   app.post("/v1/attestations", async (req, reply) => {
-    // Validated with the same closed-world rigor validateAction applies to
-    // the nested action payload — see schemas.ts's validateEnvelope for why
-    // each of these checks exists (an unvalidated approver_ids, in
-    // particular, can turn state.ts's set-membership check into a substring
-    // match once it round-trips through JSON.stringify/JSON.parse as a
-    // non-array).
-    const envelope = validateEnvelope(req.body);
-
-    const action = prepareAction(envelope.action);
-    const actionId = `act_${randomUUID()}`;
-    q.insertAction(db, {
-      id: actionId, requested_by: envelope.requested_by, type: action.type,
-      canonical_json: action.canonical_json, payload_hash: action.payload_hash,
-      risk_tier: (envelope.action as { risk_tier: string }).risk_tier,
-    });
-
-    const attestationId = `att_${randomUUID()}`;
-    q.insertAttestation(db, {
-      id: attestationId, action_id: actionId,
-      required_approvals: envelope.required_approvals,
-      approver_ids: envelope.approver_ids,
-      expires_at: new Date(Date.now() + envelope.ttl_seconds * 1000).toISOString(),
-    });
-
-    // Best-effort: an approval email never affects whether attestation
-    // creation succeeds (see ./notify.ts — emailApprovers never throws).
-    // Each approver gets a link personal to them, carrying a token that
-    // grants a view of this request and nothing more.
-    //
-    // Fire-and-forget, deliberately not awaited: a send is a real outbound
-    // SMTP conversation with no timeout configured, so a slow or blackholed
-    // mail host must never add latency to (or, worst case, block on an
-    // OS-level TCP timeout) the attestation-creation request path.
-    // emailApprovers is guaranteed to never throw or reject (see the
-    // per-principal try/catch in ./notify.ts), so this is safe with zero
-    // unhandled-rejection risk.
-    void emailApprovers(db, app.ctx.email, {
-      attestation_id: attestationId,
-      approverIds: envelope.approver_ids,
-      summary: action.summary,
-      requestedBy: envelope.requested_by,
-      expiresAt: new Date(Date.now() + envelope.ttl_seconds * 1000).toISOString(),
-      baseUrl: app.ctx.baseUrl,
-    }, app.log);
-
-    return reply.status(201).send({
-      attestation_id: attestationId,
-      status: "pending",
-      payload_hash: action.payload_hash,
-      summary: action.summary,
-      approve_url: `${app.ctx.baseUrl}/requests/${attestationId}`,
-    });
+    const result = createAttestation(db, app.ctx.email, app.ctx.baseUrl, req.body, app.log);
+    return reply.status(201).send(result);
   });
 
   app.get("/v1/attestations/:id", async (req) => {
     const { id } = req.params as { id: string };
-    // effectiveStatus must run before the action row is read: if this is the
-    // read that observes a fresh expiry, it purges canonical_json as a side
-    // effect. Reading the action first would return the pre-purge summary
-    // from this very response, one write later than the DB actually has it.
-    const status = effectiveStatus(db, id);
-    const att = q.getAttestation(db, id);
-    if (!att) throw new FailClosedError("unknown_attestation", 404, "unknown attestation");
-    const action = q.getAction(db, att.action_id)!;
-    return {
-      attestation_id: id,
-      status,
-      payload_hash: action.payload_hash,
-      required_approvals: att.required_approvals,
-      approvals: q.getApprovals(db, id).length,
-      summary: action.canonical_json
-        ? renderSummary(action.type as never, action.canonical_json)
-        : null,
-      token: att.token,
-    };
+    return getAttestationView(db, id);
   });
 
   app.post("/v1/attestations/:id/options", {
