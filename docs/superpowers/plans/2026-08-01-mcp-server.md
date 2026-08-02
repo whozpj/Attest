@@ -4,7 +4,7 @@
 
 **Goal:** Expose Human-Attest's approval workflow as three MCP tools (`request_approval`, `check_approval`, `wait_for_approval`) that any MCP client can call directly, mounted at `/mcp` on the existing Fastify app.
 
-**Architecture:** Extract the core logic of `POST /v1/attestations` and `GET /v1/attestations/:id` out of `routes.attestations.ts` into shared functions in a new `src/api/attestations-core.ts`. Both the existing REST routes and the new MCP tool handlers call those same functions — the MCP layer is a protocol adapter, never a second implementation. The MCP server is built once at boot and mounted stateless (no session tracking) via `@modelcontextprotocol/sdk`'s Streamable HTTP transport.
+**Architecture:** Extract the core logic of `POST /v1/attestations` and `GET /v1/attestations/:id` out of `routes.attestations.ts` into shared functions in a new `src/api/attestations-core.ts`. Both the existing REST routes and the new MCP tool handlers call those same functions — the MCP layer is a protocol adapter, never a second implementation. The MCP server is mounted stateless (no session tracking) via `@modelcontextprotocol/sdk`'s Streamable HTTP transport — a fresh `McpServer`/transport pair per request, per the SDK's own stateless-mode contract (see Task 5's note on the shared-instance correction).
 
 **Tech Stack:** TypeScript, `@modelcontextprotocol/sdk` 1.30 (already installed), `zod` 4.4 (already installed), Fastify 5, Vitest, Playwright.
 
@@ -1057,7 +1057,7 @@ And near the bottom of `buildServer`, alongside the other `register*Routes(app)`
   await registerMcpRoutes(app);
 ```
 
-(`registerMcpRoutes` is `async` — unlike its siblings — because it awaits `mcpServer.connect(transport)` once at boot. `buildServer` itself is already `async` and already awaits several `app.register(...)` calls above this point, so this is consistent with the file's existing style.)
+(`registerMcpRoutes` is `async` for signature consistency with the other `register*Routes` functions and to leave room for future setup that needs to await something at registration time — its body has no top-level `await` itself now that `mcpServer.connect(transport)` moved inside the per-request handler, per the correction above. `buildServer` itself is already `async` and already awaits several `app.register(...)` calls above this point, so `await registerMcpRoutes(app)` is consistent with the file's existing style regardless.)
 
 - [ ] **Step 5: Run the tests and confirm they pass**
 
