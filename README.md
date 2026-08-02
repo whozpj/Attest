@@ -51,8 +51,7 @@ bodies.
 
 Whether the human actually read or understood the summary. A passkey
 signs bytes, not a screen — it can't prove comprehension, only that this
-authenticator signed this exact action. See `docs/human-attest-mvp.md`
-for the full threat model.
+authenticator signed this exact action.
 
 ## Setup
 
@@ -98,9 +97,9 @@ It requests a $25,000 wire transfer, prints a link, and waits. Open the
 approval email or the printed link, approve with your passkey, and the
 agent verifies the resulting token before printing that it executed.
 
-There's an MCP version too, for MCP-compatible agent frameworks
-(`request_approval`, `check_approval`, `wait_for_approval`,
-`consume_approval` — see `docs/api/reference.md`):
+There's an MCP version too, for MCP-compatible agent frameworks, exposing
+`request_approval`, `check_approval`, `wait_for_approval`, and
+`consume_approval`:
 
 ```bash
 npm run demo:mcp -- <approver_email>
@@ -135,8 +134,6 @@ This is a prototype, not a hardened production system:
   Corp," just that it happened and what its hash was.
 - `/v1/*` and `/mcp` don't authenticate their caller; they're meant to sit
   behind your own network boundary, not be exposed publicly.
-
-More detail in `docs/PRODUCTION.md`.
 
 ## License
 
