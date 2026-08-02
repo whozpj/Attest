@@ -109,16 +109,49 @@ was used during development but isn't part of this published repo.
 
 ## Known limitations
 
-This is a prototype, not a hardened production system:
+Resolved requests keep only metadata and a hash, never the original
+payload text, by design — history won't show "Wire $25,000 to Acme Corp,"
+just that it happened and what its hash was. This is a permanent
+trade-off, not something the roadmap below fixes.
 
-- The signing key sits on disk unencrypted (`keys/signing-key.json`).
-- No device-loss recovery — a principal who loses their authenticator has
-  no way to re-enrol.
-- Resolved requests keep only metadata and a hash, never the original
-  payload text, by design — history won't show "Wire $25,000 to Acme
-  Corp," just that it happened and what its hash was.
-- `/v1/*` and `/mcp` don't authenticate their caller; they're meant to sit
-  behind your own network boundary, not be exposed publicly.
+## Roadmap to public use
+
+This is a working prototype, not a hardened multi-tenant service. Roughly
+in priority order:
+
+**Security**
+- [ ] Real caller authentication on `/v1/*` and `/mcp` — right now anyone
+  who can reach these endpoints can use them; they're meant to sit behind
+  your own network boundary today
+- [ ] Encrypt the signing key at rest, or move it to a KMS/HSM instead of
+  a local `keys/signing-key.json`
+- [ ] Device-loss recovery — a principal who loses their passkey has no
+  way back in today
+- [ ] Abuse prevention on principal creation — nothing stops someone from
+  spamming an arbitrary email address with enrolment/approval emails
+
+**Scale & reliability**
+- [ ] Move off a single SQLite file to a real database (Postgres) with
+  backups
+- [ ] Support running more than one server instance (SQLite is
+  single-writer, single-host)
+- [ ] A real transactional email provider (SES, Postmark, etc.) with
+  deliverability monitoring, not just an SMTP URL
+- [ ] Metrics, error alerting, and uptime monitoring
+
+**Product**
+- [ ] Multi-tenancy — every principal currently lives in one flat
+  namespace; separate organizations don't exist yet
+- [ ] Webhooks, so an integrator doesn't have to poll or hold a
+  `wait_for_approval` connection open
+- [ ] An admin UI for managing API keys, team members, and approvers per
+  organization
+- [ ] Official client SDKs
+- [ ] Billing and usage metering
+
+**Legal**
+- [ ] Terms of service and a privacy policy
+- [ ] A real support/incident-reporting channel
 
 ## License
 
