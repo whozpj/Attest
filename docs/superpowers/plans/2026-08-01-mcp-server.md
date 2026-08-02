@@ -1585,6 +1585,26 @@ git commit -m "docs: document /mcp and add a reference MCP client script"
 
 ---
 
+## Post-completion addendum (final whole-branch review)
+
+All 8 tasks above executed and passed their individual reviews exactly as
+written — including every `toolError(message: string)` call site in Tasks
+2-4 (lines ~451, 475, 678, 702, 860). The final whole-branch review, which
+looks across tasks rather than within one, found this was nonetheless a real
+gap: `toolError` never audits, and design doc §5's claim that MCP rejections
+are audited "directly via the same throw sites" was never true anywhere in
+this codebase — there is exactly one audit choke point (`server.ts`'s
+central `setErrorHandler`), and a caught-and-returned tool error never
+reaches it. Every task-scoped review was correct in isolation; none could
+have seen this, since it's a property of comparing `/v1/*` and `/mcp`
+side-by-side, not of either surface alone. Fixed in a single post-completion
+commit (see repo history after `7ba15e8`), not by rewriting the tasks above:
+`toolError` now takes `db` and writes a `q.audit(...)` row before returning,
+matching the REST path's event naming. The design spec (§5) was corrected
+alongside it. This addendum exists so a future reader of this plan's task
+text sees the accurate final state rather than inheriting the same gap by
+copying an old `toolError(message)` call site verbatim.
+
 ## Self-Review
 
 **Spec coverage:** §2 D1→Task 5, D2→Task 5, D3→Task 1, D4→Task 3 (and re-proven in Task 6), D5→Task 3, D6→Task 3, D7→Task 4, D8→ (deliberately absent, per spec), D9→Task 5 (no auth added). §3 architecture→Tasks 1,2,5. §4 tool schemas→Tasks 2,3,4. §5 error handling→every tool handler's `toolError`/rethrow pattern, Tasks 2-4. §6 testing table→Tasks 1 (unit), 2-4 (unit, in-memory), 5 (integration, real HTTP), 6 (security), 7 (e2e). §7 non-goals→respected throughout (no new action types, no auth, no verify tool, no resources/prompts).

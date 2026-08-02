@@ -113,17 +113,36 @@ it is not a tool failure.
 
 ## 5. Error handling
 
+**Corrected after the final whole-branch review** (the review found this
+section made a claim about the codebase's auditing that was never actually
+true, and every task built and reviewed correctly against that false claim
+— the gap was real, not an implementation slip): this codebase has exactly
+one audit choke point, `server.ts`'s central `setErrorHandler`, which fires
+on a *thrown* exception that reaches Fastify's request lifecycle. There is
+no second, independent "throw-site auditing" mechanism anywhere in
+`src/` — every other audited rejection in the app (`state.ts`, `notify.ts`,
+`routes.web.*`, `registration.ts`) is either a direct `q.audit` call at that
+specific site or, for HTTP rejections, a throw that reaches the central
+handler. An MCP tool handler that catches a `FailClosedError` and *returns*
+`{isError: true, content: [...]}` never throws past its own `try/catch`, so
+it never reaches the central handler and writes **zero** `audit_log` rows —
+a real, structural gap `docs/PRODUCTION.md`'s "every rejection writes a row"
+claim does not survive for this surface without fixing at the source.
+
 Tool input validation is Zod's job (the SDK validates `inputSchema` before
 the handler ever runs). Everything past that boundary reuses the existing
 `FailClosedError` machinery: `createAttestation`/`getAttestationView` throw
 the same typed errors the REST routes already throw, and the MCP tool
-handler catches them and returns an MCP tool error result
+handler catches them, **audits directly at that catch site** (the one place
+every tool rejection funnels through, since there is no throw left to reach
+the central handler), and returns an MCP tool error result
 (`{isError: true, content: [...]}`) carrying the same `code`/`message` —
 never a raw 500-equivalent, and never silently swallowed. Every rejection
-still writes to `audit_log` exactly as it does today, because it's still
-going through `server.ts`'s central error handler for anything that reaches
-an HTTP layer, and directly via the same throw sites for anything caught
-inside the tool handler itself.
+still writes to `audit_log`: for anything that reaches an HTTP layer outside
+a tool call (a malformed JSON-RPC envelope, an unhandled non-`FailClosedError`
+throw), via `server.ts`'s central error handler exactly as before; for a
+`FailClosedError` caught inside a tool handler, via the explicit `q.audit`
+call at that catch site described above.
 
 `GET /mcp` (the standalone SSE stream for server-initiated notifications) is
 not supported in stateless mode — returns `405`, per the transport's
